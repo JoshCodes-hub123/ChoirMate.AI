@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Fraunces", "Newsreader", Georgia, serif;
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --color-ivory-50: #FDFAF6;
+  --color-ivory-100: #F7F3EB;
+  --color-ivory-200: #EFE9DD;
+  --color-ivory-300: #E4DCCF;
+
+  --color-forest-950: #0B1B14;
+  --color-forest-900: #142F23;
+  --color-forest-850: #193B2D;
+  --color-forest-800: #1F4737;
+  --color-forest-700: #295B47;
+  --color-forest-600: #38765E;
+  --color-forest-100: #E4ECE7;
+
+  --color-gold-700: #936B15;
+  --color-gold-600: #B2821E;
+  --color-gold-500: #C9962B;
+  --color-gold-400: #DEAB3F;
+  --color-gold-100: #F9F2DF;
+  --color-gold-50: #FCF9F0;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  overflow-x: hidden;
+}
+
+body {
+  background-color: #FAF5ED;
+  color: #1A2621;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background-color: #E2ECE5;
+  color: #142F23;
+}
+
+/* Musical score notation & stave styling */
+.stave-line {
+  stroke: #1F4737;
+  stroke-width: 1.25;
+  stroke-linecap: round;
+}
+
+.stave-line-subtle {
+  stroke: #D2DDD7;
+  stroke-width: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

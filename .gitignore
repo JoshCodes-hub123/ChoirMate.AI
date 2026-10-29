@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build outputs
+dist/
+build/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Temporary files and test artifacts
+tmp/
+*.log
+.DS_Store
+Thumbs.db
+.cache/
+
+# Model binaries (downloaded at runtime to /tmp/choirmate-models)
+*.gguf
+python/models/
+/tmp/choirmate-models/
+
+# Environment variables & secrets (NEVER commit secrets!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.dev.env.json
+.dev.pid
+
+# AI Studio build artifacts
+.aistudio/
+
+# Keep safe example file tracked
+!.env.example
