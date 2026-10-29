@@ -33,6 +33,7 @@ import { audioEngine, InstrumentVoice } from '../utils/audioPlayer';
 import { downloadMusicXml } from '../utils/musicXmlExport';
 import { PracticeAudioBar } from './PracticeAudioBar';
 import { VoiceQuestionPanel } from './VoiceQuestionPanel';
+import { getApiUrl } from '../utils/apiConfig';
 
 
 interface LearningResultsProps {
@@ -365,7 +366,7 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
     setIsRecalculating(true);
     setRecalcMessage(null);
     try {
-      const response = await fetch('/api/recalculate-score', {
+      const response = await fetch(getApiUrl('/api/recalculate-score'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -41,6 +41,7 @@ Thumbs.db
 
 # Model binaries (downloaded at runtime to /tmp/choirmate-models)
 *.gguf
+*.part
 python/models/
 /tmp/choirmate-models/
 

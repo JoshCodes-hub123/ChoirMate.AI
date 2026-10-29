@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { ScoreAnalysis } from '../types/music';
 import { SAMPLE_SCORES } from '../data/sampleScores';
+import { getApiUrl } from '../utils/apiConfig';
 
 interface SheetWorkspaceProps {
   onScoreAnalyzed: (score: ScoreAnalysis) => void;
@@ -100,7 +101,7 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
         reader.readAsDataURL(pdfFile);
       });
 
-      const res = await fetch('/api/preview-pdf', {
+      const res = await fetch(getApiUrl('/api/preview-pdf'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -258,7 +259,7 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
         };
       }
 
-      const response = await fetch('/api/analyze-sheet', {
+      const response = await fetch(getApiUrl('/api/analyze-sheet'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

@@ -12,8 +12,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://127.0.0.1:5001';
+
+// Production CORS Middleware for cross-origin Vercel frontend requests
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 app.use(express.json({ limit: '40mb' }));
 
@@ -882,9 +893,29 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`ChoirMate AI open-weight server running on http://0.0.0.0:${PORT}`);
   });
+
+  const shutdown = (signal: string) => {
+    console.log(`[ChoirMate Server] Received ${signal}. Terminating services cleanly...`);
+    if (pythonDaemon) {
+      try {
+        pythonDaemon.kill('SIGTERM');
+      } catch {
+        // Process may already be closed
+      }
+    }
+    server.close(() => {
+      console.log('[ChoirMate Server] HTTP server closed.');
+      process.exit(0);
+    });
+    // Force exit after 5s if connections linger
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer();

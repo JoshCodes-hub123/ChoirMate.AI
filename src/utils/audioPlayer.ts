@@ -1,4 +1,5 @@
 import { MusicNote } from '../types/music';
+import { getApiUrl } from './apiConfig';
 
 export type InstrumentVoice = 'choir' | 'piano' | 'strings';
 export type AudioExportFormat = 'mp3' | 'wav';
@@ -509,7 +510,7 @@ export async function exportPracticeAudioFile(
   }
 
   try {
-    const response = await fetch('/api/export-audio', {
+    const response = await fetch(getApiUrl('/api/export-audio'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

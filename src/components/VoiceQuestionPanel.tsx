@@ -11,6 +11,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { ScoreAnalysis, VocalPart, MusicNote } from '../types/music';
+import { getApiUrl } from '../utils/apiConfig';
 
 interface VoiceQuestionPanelProps {
   score: ScoreAnalysis;
@@ -54,7 +55,7 @@ export const VoiceQuestionPanel: React.FC<VoiceQuestionPanelProps> = ({
 
   useEffect(() => {
     let mounted = true;
-    fetch('/api/voice-assistant/status')
+    fetch(getApiUrl('/api/voice-assistant/status'))
       .then((res) => res.json())
       .then((data) => {
         if (mounted) {
@@ -85,7 +86,7 @@ export const VoiceQuestionPanel: React.FC<VoiceQuestionPanelProps> = ({
     setIsProcessing(true);
     setErrorMsg(null);
     try {
-      const response = await fetch('/api/voice-assistant/ask', {
+      const response = await fetch(getApiUrl('/api/voice-assistant/ask'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
