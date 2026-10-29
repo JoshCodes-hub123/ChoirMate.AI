@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn, ChildProcess } from 'child_process';
 import { SAMPLE_SCORES } from './src/data/sampleScores.ts';
+import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
@@ -297,6 +298,174 @@ app.post('/api/preview-pdf', async (req, res) => {
   }
 });
 
+async function processScoreWithGeminiFallback(payload: {
+  imageBase64?: string;
+  pages?: string[];
+  pdfBase64?: string;
+  pdfFileName?: string;
+  musicxml?: string;
+  title?: string;
+  composer?: string;
+  tempo?: number;
+}): Promise<any> {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is not configured on the backend.');
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
+
+  const targetImage = payload.imageBase64 || (payload.pages && payload.pages[0]) || null;
+  const promptText = `You are an expert musicologist, choral director, and Optical Music Recognition sight-singing professor. 
+Analyze the provided sheet music image or document context and extract accurate musical details to help choir members and beginner singers practice.
+
+Return a valid JSON object matching this exact TypeScript structure:
+{
+  "title": "${payload.title || 'Analyzed Choral Score'}",
+  "composer": "${payload.composer || 'Traditional / Unknown'}",
+  "source": "gemini_fallback_engine",
+  "processingProvider": "Gemini-assisted analysis",
+  "isGeminiFallback": true,
+  "clef": "treble",
+  "tempo": ${Number(payload.tempo || 88)},
+  "keySignature": {
+    "key": "C Major",
+    "tonality": "Major",
+    "sharps": 0,
+    "flats": 0,
+    "fifths": 0,
+    "homeNote": "C",
+    "homeSolfa": "Do",
+    "explanation": "Key of C Major has no sharps or flats, with Do as C."
+  },
+  "timeSignature": {
+    "numerator": 4,
+    "denominator": 4,
+    "beatsPerMeasure": 4,
+    "beatUnit": "quarter",
+    "explanation": "4/4 time means four quarter-note beats per measure.",
+    "countingPattern": "1 - 2 - 3 - 4"
+  },
+  "parts": [
+    {
+      "id": "S1",
+      "name": "Soprano",
+      "clef": "treble",
+      "staffIndex": 0,
+      "notes": [
+        { "pitch": "C4", "solfa": "Do", "duration": 1, "measure": 1, "beat": 1, "frequency": 261.63, "lyric": "Sing" },
+        { "pitch": "E4", "solfa": "Mi", "duration": 1, "measure": 1, "beat": 2, "frequency": 329.63, "lyric": "praise" },
+        { "pitch": "G4", "solfa": "Sol", "duration": 2, "measure": 1, "beat": 3, "frequency": 392.00, "lyric": "now" }
+      ],
+      "measures": [
+        { "measureNumber": 1, "expectedBeats": 4, "actualBeats": 4, "confidence": "high", "noteCount": 3, "restCount": 0 }
+      ]
+    }
+  ],
+  "rhythmBreakdown": {
+    "patterns": [
+      { "name": "Quarter Note", "durationInBeats": 1, "countWord": "1", "explanation": "Steady beat", "symbol": "♩" }
+    ],
+    "countingGuide": "Count steadily: 1 - 2 - 3 - 4",
+    "advice": "Keep your breath support steady across each measure."
+  },
+  "simpleExplanation": {
+    "essence": "A melodious choral piece suitable for sight-singing practice.",
+    "range": "C4 - G5",
+    "melodicShape": "Ascending stepwise motion with consonant intervals.",
+    "choralTip": "Blend vowel sounds across the section."
+  },
+  "practiceSteps": [
+    { "step": 1, "title": "Solfa Chanting", "description": "Chant the rhythm using solfa syllables (Do, Re, Mi).", "focus": "Rhythm & Pitch Accuracy" },
+    { "step": 2, "title": "Melody Sighting", "description": "Sing along with the audio practice guide.", "focus": "Tuning & Resonance" }
+  ],
+  "recognitionSummary": {
+    "overallConfidence": "medium",
+    "totalEvents": 3,
+    "sungNotesCount": 3,
+    "restsCount": 0,
+    "uncertainMeasuresCount": 0,
+    "needsReview": false
+  }
+}
+
+Ensure all notes have realistic pitches, solfa syllables, durations, frequencies, and measure numbers.`;
+
+  const contents: any[] = [];
+  if (targetImage) {
+    const cleanBase64 = targetImage.includes(',') ? targetImage.split(',', 2)[1] : targetImage;
+    const mimeType = targetImage.includes('image/jpeg') || targetImage.includes('jpg') ? 'image/jpeg' : 'image/png';
+    contents.push({
+      inlineData: {
+        mimeType,
+        data: cleanBase64,
+      }
+    });
+  }
+  contents.push({ text: promptText });
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3.8-flash",
+    contents,
+    config: {
+      responseMimeType: "application/json",
+      systemInstruction: "You are an expert music analysis engine for ChoirMate AI. Return strictly valid JSON matching the requested schema.",
+    }
+  });
+
+  const rawText = response.text;
+  if (!rawText) {
+    throw new Error('Gemini returned empty response for sheet music analysis.');
+  }
+
+  const parsedJson = JSON.parse(rawText.trim());
+  if (!parsedJson || typeof parsedJson !== 'object') {
+    throw new Error('Gemini output could not be parsed as valid score JSON.');
+  }
+
+  parsedJson.source = 'gemini_fallback_engine';
+  parsedJson.processingProvider = 'Gemini-assisted analysis';
+  parsedJson.isGeminiFallback = true;
+  if (!parsedJson.id) {
+    parsedJson.id = 'gemini_score_' + Date.now();
+  }
+  if (!parsedJson.parts || !Array.isArray(parsedJson.parts) || parsedJson.parts.length === 0) {
+    parsedJson.parts = [
+      {
+        id: 'S1',
+        name: 'Soprano',
+        clef: parsedJson.clef || 'treble',
+        staffIndex: 0,
+        notes: parsedJson.notes || [],
+        measures: parsedJson.measures || []
+      }
+    ];
+  }
+  if (!parsedJson.notes && parsedJson.parts[0]?.notes) {
+    parsedJson.notes = parsedJson.parts[0].notes;
+  }
+  if (targetImage && !parsedJson.imageUrl) {
+    parsedJson.imageUrl = targetImage;
+  }
+  if (payload.pages && !parsedJson.pageImages) {
+    parsedJson.pageImages = payload.pages;
+  }
+
+  return {
+    success: true,
+    data: parsedJson,
+    source: 'gemini_fallback_engine',
+    processingProvider: 'Gemini-assisted analysis',
+  };
+}
+
 app.post('/api/analyze-sheet', async (req, res) => {
   try {
     const { imageBase64, pages, pdfBase64, pdfFileName, sampleId, musicxml, title, composer, tempo } =
@@ -395,25 +564,28 @@ app.post('/api/analyze-sheet', async (req, res) => {
     const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
     const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
 
-    pythonProcess.on('error', (err: any) => {
-      console.warn('[ChoirMate Server] python3 not available for analyze-sheet, using Node fallback analysis:', err.message);
-      const fallbackSample = SAMPLE_SCORES[0];
-      const resultData = {
-        ...fallbackSample,
-        title: title || fallbackSample.title,
-        composer: composer || fallbackSample.composer,
-        tempo: tempo ? Number(tempo) : fallbackSample.tempo,
-        source: 'node_fallback_engine',
-        isDemonstration: true,
-        demonstrationNotice: 'Analyzed via ChoirMate AI Node.js fallback engine (Python OMR environment not installed in this runtime).',
-        imageUrl: pageImages[0] || undefined,
-        pageImages: pageImages.length > 0 ? pageImages : undefined,
-      };
-      return res.json({
-        success: true,
-        data: resultData,
-        source: 'node_fallback_engine',
-      });
+    const triggerGeminiFallback = async () => {
+      try {
+        if (!process.env.GEMINI_API_KEY) {
+          throw new Error('GEMINI_API_KEY not configured');
+        }
+        console.log('[ChoirMate Server] Primary engine unavailable/failed. Activating Gemini fallback...');
+        const geminiResult = await processScoreWithGeminiFallback(payload);
+        sheetAnalysisCache.set(cacheKey, geminiResult);
+        return res.json(geminiResult);
+      } catch (geminiErr: any) {
+        console.warn('[ChoirMate Server] Gemini fallback failed:', geminiErr?.message);
+        return res.status(503).json({
+          success: false,
+          errorCode: 'ANALYSIS_ENGINE_UNAVAILABLE',
+          error: 'Music analysis could not be completed at the moment because the primary recognition engine and Gemini fallback are temporarily unavailable. Please try again.',
+        });
+      }
+    };
+
+    pythonProcess.on('error', async (err: any) => {
+      console.warn('[ChoirMate Server] python3 not available for analyze-sheet, attempting Gemini fallback:', err.message);
+      return await triggerGeminiFallback();
     });
 
     let stdoutData = '';
@@ -427,19 +599,14 @@ app.post('/api/analyze-sheet', async (req, res) => {
       stderrData += chunk.toString();
     });
 
-    pythonProcess.on('close', (code) => {
+    pythonProcess.on('close', async (code) => {
       if (stderrData.trim()) {
         console.error('[Python CLI stderr]:', stderrData.trim());
       }
 
       if (!stdoutData.trim()) {
-        return res.status(503).json({
-          success: false,
-          errorCode: 'ANALYSIS_ENGINE_UNAVAILABLE',
-          error: isBootstrappingPython
-            ? 'The Optical Music Recognition engine is finishing initial setup. Please try again in 20–30 seconds.'
-            : `Score analysis process exited unexpectedly (code ${code ?? 'unknown'}). Please verify the uploaded file is a valid PDF, PNG, or JPG of printed sheet music.`,
-        });
+        console.warn('[ChoirMate Server] Python CLI returned empty stdout. Attempting Gemini fallback...');
+        return await triggerGeminiFallback();
       }
 
       try {
@@ -451,26 +618,12 @@ app.post('/api/analyze-sheet', async (req, res) => {
           }
           return res.json(parsed);
         } else {
-          const status = parsed.errorCode === 'PYTHON_DEPENDENCY_MISSING' ? 503 : 422;
-          return res.status(status).json({
-            success: false,
-            errorCode: parsed.errorCode || 'OMR_RECOGNITION_FAILED',
-            error:
-              parsed.error ||
-              'HOMR Optical Music Recognition could not detect clean musical staves from this document.',
-            sectionDiagnostics: parsed.sectionDiagnostics || [],
-            omrAttempted: true,
-            recognitionEngine: 'HOMR',
-            aiTeacher: 'SmolLM2-360M-Instruct-GGUF',
-          });
+          console.warn('[ChoirMate Server] Python CLI OMR recognition failed. Attempting Gemini fallback...');
+          return await triggerGeminiFallback();
         }
       } catch (parseError) {
-        console.error('Failed to parse Python pipeline JSON output:', stdoutData, parseError);
-        return res.status(500).json({
-          success: false,
-          errorCode: 'INVALID_ENGINE_OUTPUT',
-          error: 'The music analysis engine returned an unreadable response. Please try again.',
-        });
+        console.error('Failed to parse Python pipeline JSON output, attempting Gemini fallback:', stdoutData, parseError);
+        return await triggerGeminiFallback();
       }
     });
 

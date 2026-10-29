@@ -432,6 +432,9 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
               <span className="text-xs font-mono text-[#6A6258] bg-[#F3EFE6] px-2.5 py-1 rounded-md uppercase">
                 Clef: {activePart.clef}
               </span>
+              <span className="text-xs font-mono text-[#5A4D41] bg-[#EAE2D4] px-2.5 py-1 rounded-md">
+                Engine: {score.processingProvider || (score.source === 'gemini_fallback_engine' ? 'Gemini-assisted analysis' : 'Primary engine')}
+              </span>
               {summary && (
                 <span
                   className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-md ${
