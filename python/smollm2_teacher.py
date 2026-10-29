@@ -16,18 +16,28 @@ MODEL_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main/{MODEL_FILENAME}"
 MODEL_PATH = os.environ.get("SMOLLM2_MODEL_PATH", os.path.join("/tmp", "choirmate-models", MODEL_FILENAME))
 
 
+import gc
+
+
 class SmolLM2Teacher:
     def __init__(self, model_path: str = MODEL_PATH):
         self.model_path = model_path
         self.llm = None
         self._lock = threading.Lock()
-        self._init_model()
+        self._init_attempted = False
+
+    def is_enabled(self) -> bool:
+        """Returns True only if SmolLM2 local inference is explicitly enabled via environment variable."""
+        val = os.environ.get("SMOLLM2_ENABLED", "0").lower().strip()
+        return val in ("1", "true", "yes", "on")
 
     def _ensure_model_file(self) -> None:
-        """Downloads SmolLM2 GGUF into /tmp/choirmate-models if missing and auto-download is enabled."""
+        """Downloads SmolLM2 GGUF into /tmp/choirmate-models only if explicitly enabled and auto-download is set."""
+        if not self.is_enabled():
+            return
         if os.path.exists(self.model_path) and os.path.getsize(self.model_path) > 10_000_000:
             return
-        if os.environ.get("SMOLLM2_AUTO_DOWNLOAD", "1") == "0":
+        if os.environ.get("SMOLLM2_AUTO_DOWNLOAD", "0").lower().strip() not in ("1", "true", "yes", "on"):
             return
         try:
             parent_dir = os.path.dirname(self.model_path)
@@ -42,23 +52,31 @@ class SmolLM2Teacher:
         except Exception as dl_err:
             sys.stderr.write(f"[SmolLM2Teacher] Notice: Could not download GGUF model: {dl_err}\n")
 
-    def _init_model(self):
-        """Loads llama-cpp-python model if GGUF file exists (or after downloading to /tmp)."""
-        self._ensure_model_file()
-        if os.path.exists(self.model_path):
-            try:
-                from llama_cpp import Llama
-                self.llm = Llama(
-                    model_path=self.model_path,
-                    n_ctx=2048,
-                    n_threads=4,
-                    verbose=False
-                )
-            except Exception as e:
-                sys.stderr.write(f"[SmolLM2Teacher] Notice: llama-cpp-python not initialized: {e}\n")
-                self.llm = None
-        else:
-            self.llm = None
+    def get_llm(self):
+        """Lazily loads llama-cpp-python model with compact memory context (n_ctx=512) only when requested."""
+        if not self.is_enabled():
+            return None
+        with self._lock:
+            if self.llm is not None:
+                return self.llm
+            if self._init_attempted:
+                return None
+            self._init_attempted = True
+            self._ensure_model_file()
+            if os.path.exists(self.model_path):
+                try:
+                    from llama_cpp import Llama
+                    self.llm = Llama(
+                        model_path=self.model_path,
+                        n_ctx=512,
+                        n_threads=1,
+                        verbose=False
+                    )
+                    sys.stderr.write("[SmolLM2Teacher] Initialized SmolLM2-360M with low-memory profile.\n")
+                except Exception as e:
+                    sys.stderr.write(f"[SmolLM2Teacher] Notice: llama-cpp-python not initialized: {e}\n")
+                    self.llm = None
+            return self.llm
 
     def explain_score(
         self,
@@ -294,7 +312,8 @@ Range: {lowest_note['pitch']} ({lowest_note['solfa']}) to {highest_note['pitch']
         total_measures = len(measures_set)
 
         ai_answer: Optional[str] = None
-        if self.llm is not None:
+        llm_inst = self.get_llm()
+        if llm_inst is not None:
             prompt = f"""<|im_start|>system
 You are ChoirMate AI's supportive choral coach. Answer the student's question in 2-4 concise, encouraging sentences using ONLY the verified score facts below. Never invent notes.<|im_end|>
 <|im_start|>user
@@ -309,13 +328,15 @@ Student Question: {clean_q}<|im_end|>
 """
             try:
                 with self._lock:
-                    self.llm.reset()
-                    out = self.llm(prompt, max_tokens=180, stop=["<|im_end|>"], temperature=0.25)
+                    llm_inst.reset()
+                    out = llm_inst(prompt, max_tokens=180, stop=["<|im_end|>"], temperature=0.25)
                     candidate = out["choices"][0]["text"].strip()
                     if len(candidate) > 15:
                         ai_answer = candidate
             except Exception as exc:
                 sys.stderr.write(f"[SmolLM2Teacher] Q&A inference fallback: {exc}\n")
+            finally:
+                gc.collect()
 
         if not ai_answer:
             q_lower = clean_q.lower()
