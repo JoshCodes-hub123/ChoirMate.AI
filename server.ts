@@ -1071,7 +1071,10 @@ app.post('/api/voice-assistant/ask', async (req, res) => {
 async function startServer() {
   startPythonDaemon();
 
-  if (process.env.NODE_ENV !== 'production') {
+  const hasDist = fs.existsSync(path.join(__dirname, 'dist', 'index.html'));
+  const hasRootIndex = fs.existsSync(path.join(__dirname, 'index.html'));
+
+  if (!hasDist && hasRootIndex) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1079,32 +1082,14 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const staticDir = fs.existsSync(path.join(__dirname, 'index.html'))
-      ? __dirname
-      : fs.existsSync(path.join(__dirname, 'dist', 'index.html'))
-      ? path.join(__dirname, 'dist')
-      : null;
-
-    if (staticDir) {
-      app.use(express.static(staticDir));
-      app.get('*', (req, res, next) => {
-        if (req.path.startsWith('/api/')) {
-          return next();
-        }
-        res.sendFile(path.join(staticDir, 'index.html'));
-      });
-    } else {
-      app.get('*', (req, res, next) => {
-        if (req.path.startsWith('/api/')) {
-          return next();
-        }
-        res.status(200).json({
-          status: 'ok',
-          service: 'ChoirMate AI Backend API',
-          message: 'Frontend is hosted separately on Vercel. All /api/* endpoints are active.'
-        });
-      });
-    }
+    const staticDir = hasDist ? path.join(__dirname, 'dist') : __dirname;
+    app.use(express.static(staticDir));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/')) {
+        return next();
+      }
+      res.sendFile(path.join(staticDir, 'index.html'));
+    });
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
