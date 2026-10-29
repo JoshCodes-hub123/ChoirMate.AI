@@ -37,7 +37,7 @@ RUN python3 -c "from homr.main import download_weights; download_weights(False)"
 
 # 3. Install Node.js dependencies
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # 4. Copy source code and assets
 COPY . .
