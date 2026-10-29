@@ -70,6 +70,20 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
     }
   };
 
+  const formatApiError = (err: unknown, fallback: string): string => {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed')) {
+      return 'Could not connect to the Render backend server. Note: Render free tier instances spin down after inactivity and take 30–50 seconds to wake up on the first request. Please wait a moment and try again!';
+    }
+    if (msg.includes('502') || msg.includes('503') || msg.includes('504')) {
+      return 'The backend server or Python OMR recognition service is starting up or temporarily busy. Please try again in 20 seconds.';
+    }
+    if (msg.includes('JSON') || msg.includes('Unexpected token')) {
+      return 'The server returned an unreadable response. The Render backend instance may have restarted or experienced an out-of-memory event. Please try again.';
+    }
+    return msg || fallback;
+  };
+
   const handlePdfFile = async (pdfFile: File) => {
     if (pdfFile.size === 0) {
       setErrorMessage(`The file "${pdfFile.name}" is empty.`);
@@ -125,9 +139,10 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
     } catch (err: unknown) {
       setPdfPreview(null);
       setErrorMessage(
-        err instanceof Error
-          ? err.message
-          : 'Could not preview the selected PDF document. Please verify that it is a valid, unencrypted PDF.'
+        formatApiError(
+          err,
+          'Could not preview the selected PDF document. Please verify that it is a valid, unencrypted PDF.'
+        )
       );
     } finally {
       setIsRenderingPdfPreview(false);
@@ -285,8 +300,9 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
       };
       onScoreAnalyzed(finalScore);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unexpected error analyzing sheet music';
-      setErrorMessage(msg);
+      setErrorMessage(
+        formatApiError(err, 'Unexpected error analyzing sheet music score')
+      );
     } finally {
       setIsAnalyzing(false);
     }
