@@ -70,16 +70,28 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
     }
   };
 
+  const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, delayMs = 1500): Promise<Response> => {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      if (retries > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+        return fetchWithRetry(url, options, retries - 1, delayMs * 1.5);
+      }
+      throw err;
+    }
+  };
+
   const formatApiError = (err: unknown, fallback: string): string => {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed')) {
-      return 'Could not connect to the Render backend server. Note: Render free tier instances spin down after inactivity and take 30–50 seconds to wake up on the first request. Please wait a moment and try again!';
+      return 'Could not connect to the backend server. Please check your network connection and try again.';
     }
     if (msg.includes('502') || msg.includes('503') || msg.includes('504')) {
-      return 'The backend server or Python OMR recognition service is starting up or temporarily busy. Please try again in 20 seconds.';
+      return 'The music analysis engine is initializing or temporarily busy. Please try again in 15 seconds.';
     }
     if (msg.includes('JSON') || msg.includes('Unexpected token')) {
-      return 'The server returned an unreadable response. The Render backend instance may have restarted or experienced an out-of-memory event. Please try again.';
+      return 'The server returned an unreadable response. Please try again.';
     }
     return msg || fallback;
   };
@@ -115,7 +127,7 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
         reader.readAsDataURL(pdfFile);
       });
 
-      const res = await fetch(getApiUrl('/api/preview-pdf'), {
+      const res = await fetchWithRetry(getApiUrl('/api/preview-pdf'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -274,7 +286,7 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
         };
       }
 
-      const response = await fetch(getApiUrl('/api/analyze-sheet'), {
+      const response = await fetchWithRetry(getApiUrl('/api/analyze-sheet'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
