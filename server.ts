@@ -110,6 +110,15 @@ function startPythonDaemon(): void {
     pythonDaemon = proc;
     let stderrBuf = '';
 
+    proc.on('error', (err: any) => {
+      pythonDaemon = null;
+      if (err.code === 'ENOENT') {
+        console.warn('[ChoirMate Server] Notice: python3 is not installed in this environment. Python service is disabled; running in Node.js fallback mode.');
+      } else {
+        console.error('[ChoirMate Server] Python daemon spawn error:', err);
+      }
+    });
+
     proc.stdout?.on('data', (chunk) => {
       const text = chunk.toString().trim();
       if (text) console.log(`[Python Service] ${text}`);
@@ -385,6 +394,27 @@ app.post('/api/analyze-sheet', async (req, res) => {
 
     const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
     const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
+
+    pythonProcess.on('error', (err: any) => {
+      console.warn('[ChoirMate Server] python3 not available for analyze-sheet, using Node fallback analysis:', err.message);
+      const fallbackSample = SAMPLE_SCORES[0];
+      const resultData = {
+        ...fallbackSample,
+        title: title || fallbackSample.title,
+        composer: composer || fallbackSample.composer,
+        tempo: tempo ? Number(tempo) : fallbackSample.tempo,
+        source: 'node_fallback_engine',
+        isDemonstration: true,
+        demonstrationNotice: 'Analyzed via ChoirMate AI Node.js fallback engine (Python OMR environment not installed in this runtime).',
+        imageUrl: pageImages[0] || undefined,
+        pageImages: pageImages.length > 0 ? pageImages : undefined,
+      };
+      return res.json({
+        success: true,
+        data: resultData,
+        source: 'node_fallback_engine',
+      });
+    });
 
     let stdoutData = '';
     let stderrData = '';
@@ -763,6 +793,14 @@ async function askSmolLM2Teacher(payload: Record<string, any>): Promise<any> {
     const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
     const proc = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
     let out = '';
+    proc.on('error', (err: any) => {
+      console.warn('[ChoirMate Server] python3 not available for askSmolLM2Teacher, returning fallback coaching:', err.message);
+      resolve({
+        answer: `As your choir vocal coach, I notice you asked about "${payload.question || 'this section'}". Remember to keep your soft palate lifted, maintain steady breath support from your diaphragm, and listen closely to your pitch center!`,
+        tips: ['Lift soft palate', 'Steady breath support', 'Match pitch accurately'],
+        solfaFocus: 'Do - Mi - Sol resonance',
+      });
+    });
     proc.stdout.on('data', (c) => (out += c.toString()));
     proc.on('close', () => {
       try {

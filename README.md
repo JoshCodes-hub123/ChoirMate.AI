@@ -1,11 +1,17 @@
 # ChoirMate AI — Open-Weight Sheet Music OMR, Solfa Tutor & Practice Audio Studio
 
-**Submitted to OPEN//BUILD 2026 | Theme: “AI belongs to everyone.”**
+**Submitted to OPEN//BUILD 2026 | Theme: “AI belongs to everyone.”**  
+**Submission Deadline:** Thursday, October 29, 2026 at 11:59 PM WAT  
+**Team:** Abayomi Joshua O. & Adam Lawal (Federal University of Technology, Akure - FUTA)  
 
-Repository: [https://github.com/JoshCodes-hub123/choirmate-ai](https://github.com/JoshCodes-hub123/choirmate-ai)  
+Repository: [https://github.com/JoshCodes-hub123/ChoirMate.AI](https://github.com/JoshCodes-hub123/ChoirMate.AI)  
 Target Branch: `main`  
 Application License: GNU General Public License v3.0 (GPL-3.0)  
 Live Application Preview: [https://ais-pre-647inpvrvo4qp5v32ic7hu-664748108050.europe-west2.run.app](https://ais-pre-647inpvrvo4qp5v32ic7hu-664748108050.europe-west2.run.app)
+
+Official Submission Docs:
+- [OPEN//BUILD 2026 Submission Document](./docs/OPENBUILD_2026_SUBMISSION.md)
+- [Technical Decisions & Architecture](./docs/TECHNICAL_DECISIONS.md)
 
 ---
 
