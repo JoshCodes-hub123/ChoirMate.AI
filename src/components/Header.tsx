@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { X, Check, User } from 'lucide-react';
+import { X, Check, User, Presentation } from 'lucide-react';
 
 interface HeaderProps {
   currentScreen?: 'home' | 'workspace' | 'results' | 'practice';
   onNavigate?: (screen: 'home' | 'workspace' | 'results' | 'practice') => void;
   hasScore?: boolean;
+  onOpenPitchDeck?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onNavigate,
+  onOpenPitchDeck,
 }) => {
   const [showSignInModal, setShowSignInModal] = useState(false);
   const [userRole, setUserRole] = useState<'guest' | 'chorister' | 'director'>('chorister');
@@ -36,12 +38,22 @@ export const Header: React.FC<HeaderProps> = ({
             />
           </button>
 
-          {/* Right: Sole Sign in Action */}
-          <div className="flex items-center">
+          {/* Right: Pitch Deck & Sign in Actions */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onOpenPitchDeck?.()}
+              className="min-h-[42px] px-4 py-2 rounded-full bg-[#9E7B35] text-white hover:bg-[#85672B] text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.98]"
+            >
+              <Presentation className="w-4 h-4" />
+              <span className="hidden sm:inline">OPEN//BUILD Pitch Deck</span>
+              <span className="sm:hidden">Pitch Deck</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowSignInModal(true)}
-              className="min-h-[42px] px-6 py-2 rounded-full border border-[#143826] text-[#143826] hover:bg-[#143826]/5 text-sm font-medium transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
+              className="min-h-[42px] px-5 py-2 rounded-full border border-[#143826] text-[#143826] hover:bg-[#143826]/5 text-sm font-medium transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
             >
               {signedIn ? (
                 <>

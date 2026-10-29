@@ -1,6 +1,7 @@
 import React, { useState, Suspense, lazy, useCallback } from 'react';
 import { Header } from './components/Header';
 import { HomeScreen } from './components/HomeScreen';
+import { PitchDeckModal } from './components/PitchDeckModal';
 import { ScoreAnalysis } from './types/music';
 import { SAMPLE_SCORES } from './data/sampleScores';
 
@@ -32,6 +33,7 @@ export function App() {
     SAMPLE_SCORES[0] || null
   );
   const [selectedPartId, setSelectedPartId] = useState<string>('P1');
+  const [showPitchDeck, setShowPitchDeck] = useState<boolean>(false);
 
   const handleScoreAnalyzed = useCallback((score: ScoreAnalysis) => {
     setCurrentScore(score);
@@ -52,6 +54,7 @@ export function App() {
         currentScreen={currentScreen}
         onNavigate={setCurrentScreen}
         hasScore={Boolean(currentScore)}
+        onOpenPitchDeck={() => setShowPitchDeck(true)}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 lg:px-12 py-6 sm:py-8">
@@ -102,6 +105,9 @@ export function App() {
           </p>
         </div>
       </footer>
+
+      {/* OPEN//BUILD 2026 Pitch Deck Modal */}
+      <PitchDeckModal isOpen={showPitchDeck} onClose={() => setShowPitchDeck(false)} />
     </div>
   );
 }
