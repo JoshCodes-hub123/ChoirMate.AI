@@ -4,11 +4,11 @@
 # 1. Optical Music Recognition (OMR) & PDF Rendering
 homr==0.6.2
 pypdfium2>=5.0.0
-Pillow>=9.5.0
-opencv-python-headless>=4.7.0,<5.0.0
+Pillow>=12.1.0,<13.0.0
+opencv-python-headless>=4.12.0.88,<5.0.0
 music21>=9.1.0
-scipy>=1.10.0
-numpy>=1.23.0,<2.0.0
+scipy>=1.14.0
+numpy>=2.2.6,<3.0.0
 
 # 2. Open-Weight Model Local CPU Inference (SmolLM2 GGUF)
 huggingface-hub>=0.20.0
@@ -19,7 +19,7 @@ llama-cpp-python>=0.2.75
 fastapi>=0.100.0
 uvicorn>=0.22.0
 pydantic>=2.0.0
-requests>=2.28.0
+requests>=2.32.5,<3.0.0
 
 # 4. Audio Processing & System Tools
 # Note: FFmpeg is required on the system for genuine MP3 audio export:
