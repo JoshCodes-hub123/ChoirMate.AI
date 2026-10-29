@@ -10,9 +10,6 @@ function resolveApiBase(): string {
     if (metaEnv && typeof metaEnv.VITE_API_URL === 'string' && metaEnv.VITE_API_URL.trim()) {
       return metaEnv.VITE_API_URL.trim();
     }
-    if (typeof window !== 'undefined' && window.location && window.location.hostname.endsWith('vercel.app')) {
-      return 'https://choirmate-ai-backend.onrender.com';
-    }
   } catch {
     // Ignore in non-vite contexts
   }
