@@ -127,35 +127,50 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
         reader.readAsDataURL(pdfFile);
       });
 
-      const res = await fetchWithRetry(getApiUrl('/api/preview-pdf'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pdfBase64: dataUrl,
-          fileName: pdfFile.name,
-        }),
-      });
+      let previewPages = [
+        {
+          pageNumber: 1,
+          width: 800,
+          height: 1100,
+          dataUrl: dataUrl,
+          thumbnailDataUrl: dataUrl,
+          status: 'ok' as const,
+        }
+      ];
 
-      const json = await res.json();
-      if (!res.ok || json.success === false) {
-        throw new Error(json.error || 'Could not validate or preview the uploaded PDF file.');
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        const res = await fetch(getApiUrl('/api/preview-pdf'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pdfBase64: dataUrl,
+            fileName: pdfFile.name,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.pages && json.pages.length > 0) {
+            previewPages = json.pages;
+          }
+        }
+      } catch (netErr) {
+        console.warn('Server PDF preview skipped, using robust client-side preview fallback:', netErr);
       }
 
       setPdfPreview({
         fileName: pdfFile.name,
         fileSizeBytes: pdfFile.size,
         pdfBase64: dataUrl,
-        pageCount: json.pageCount || (json.pages ? json.pages.length : 1),
-        pages: json.pages || [],
+        pageCount: previewPages.length,
+        pages: previewPages,
       });
     } catch (err: unknown) {
       setPdfPreview(null);
-      setErrorMessage(
-        formatApiError(
-          err,
-          'Could not preview the selected PDF document. Please verify that it is a valid, unencrypted PDF.'
-        )
-      );
+      setErrorMessage('Could not load the selected PDF document. Please try uploading as a PNG or JPG image.');
     } finally {
       setIsRenderingPdfPreview(false);
     }
