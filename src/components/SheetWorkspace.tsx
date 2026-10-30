@@ -183,11 +183,11 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
     const firstFile = files[0];
     const fileNameLower = firstFile.name.toLowerCase();
 
-    // 1. Check for PDF document
+    // 1. Check for PDF document (Disabled)
     const isPdf =
       fileNameLower.endsWith('.pdf') || firstFile.type === 'application/pdf';
     if (isPdf) {
-      handlePdfFile(firstFile);
+      setErrorMessage('PDF uploads are currently disabled. Please upload a sheet music image (PNG, JPG, JPEG, WebP).');
       return;
     }
 
@@ -642,24 +642,20 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({ onScoreAnalyzed 
               </div>
               <div>
                 <p className="text-base font-semibold text-[#2A2622]">
-                  Drop a multi-page PDF or sheet music image(s), or click to browse
+                  Drop sheet music image(s) (PNG, JPG, JPEG, WebP), or click to browse
                 </p>
                 <p className="text-xs text-[#78716C] mt-1">
-                  Supports <strong>PDF (.pdf up to 12 pages / 25 MB)</strong>, <strong>PNG / JPG / JPEG</strong> (up to 15 MB), or <strong>MusicXML (.musicxml)</strong>
+                  Supports <strong>PNG / JPG / JPEG / WebP</strong> (up to 15 MB) or <strong>MusicXML (.musicxml)</strong>
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
                 <span className="inline-flex items-center gap-1.5 text-xs text-[#6A6258] bg-white px-3 py-1.5 rounded-lg border border-[#E6E0D4]">
-                  <FileText className="w-3.5 h-3.5 text-[#B85D19]" />
-                  Multi-Page PDF Scores
+                  <Camera className="w-3.5 h-3.5 text-[#B85D19]" />
+                  High-Resolution Sheet Music Images
                 </span>
                 <span className="inline-flex items-center gap-1.5 text-xs text-[#6A6258] bg-white px-3 py-1.5 rounded-lg border border-[#E6E0D4]">
                   <Layers className="w-3.5 h-3.5 text-[#B85D19]" />
                   Multi-System &amp; SATB Parts
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-xs text-[#6A6258] bg-white px-3 py-1.5 rounded-lg border border-[#E6E0D4]">
-                  <Camera className="w-3.5 h-3.5 text-[#B85D19]" />
-                  Original Score Preserved
                 </span>
               </div>
             </div>
