@@ -145,11 +145,16 @@ def retrieve(args: argparse.Namespace) -> None:
 
     job = camber.job.get_job(job_id=args.job_id)
     status_value = str(job.status).upper()
-    if "FAIL" in status_value or "CANCEL" in status_value:
+    successful_states = {"SUCCEEDED", "SUCCESS", "COMPLETED", "COMPLETE", "DONE"}
+    if status_value not in successful_states:
         try:
             job.read_logs(tail_lines=120)
-        finally:
-            raise SystemExit(f"Job is not successful (status: {job.status}); output was not retrieved.")
+        except Exception as exc:
+            print(f"Could not read logs: {exc}")
+        raise SystemExit(
+            f"Job status is '{job.status}', not a confirmed success state. "
+            "Wait for the dashboard to show completion; output was not retrieved."
+        )
 
     source = f"choirmate/jobs/{args.run_id}/output"
     destination = str(Path(args.destination).expanduser().resolve() / args.run_id)
