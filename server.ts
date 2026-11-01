@@ -4,14 +4,24 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { SAMPLE_SCORES } from './src/data/sampleScores.ts';
 import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
+process.on('uncaughtException', (err) => {
+  console.error('[ChoirMate Server] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[ChoirMate Server] Unhandled rejection:', reason);
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const rootDir = fs.existsSync(path.join(__dirname, 'package.json'))
+  ? __dirname
+  : path.resolve(__dirname, '..');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -95,6 +105,25 @@ async function checkPythonServiceHealth(): Promise<{ active: boolean; modelLoade
 function startPythonDaemon(): void {
   if (pythonDaemon || isBootstrappingPython) return;
 
+  let hasPy3 = false;
+  try {
+    const check = spawnSync('python3', ['--version'], { stdio: 'ignore' });
+    hasPy3 = check.status === 0;
+  } catch {
+    hasPy3 = false;
+  }
+
+  if (!hasPy3) {
+    console.log('[ChoirMate Server] Python3 not present in container environment. Running in full Node.js + Gemini Vision OMR mode.');
+    return;
+  }
+
+  const servicePy = path.join(rootDir, 'python', 'service.py');
+  if (!fs.existsSync(servicePy)) {
+    console.log('[ChoirMate Server] python/service.py not found. Running in full Node.js + Gemini Vision OMR mode.');
+    return;
+  }
+
   checkPythonServiceHealth().then(({ active }) => {
     if (active || pythonDaemon || isBootstrappingPython) return;
 
@@ -103,7 +132,7 @@ function startPythonDaemon(): void {
       'python3',
       ['-m', 'uvicorn', 'python.service:app', '--host', '127.0.0.1', '--port', '5001'],
       {
-        cwd: __dirname,
+        cwd: rootDir,
         stdio: ['ignore', 'pipe', 'pipe'],
       }
     );
@@ -113,11 +142,7 @@ function startPythonDaemon(): void {
 
     proc.on('error', (err: any) => {
       pythonDaemon = null;
-      if (err.code === 'ENOENT') {
-        console.warn('[ChoirMate Server] Notice: python3 is not installed in this environment. Python service is disabled; running in Node.js fallback mode.');
-      } else {
-        console.error('[ChoirMate Server] Python daemon spawn error:', err);
-      }
+      console.warn('[ChoirMate Server] Python daemon unavailable, running in Node.js + Gemini mode:', err.message);
     });
 
     proc.stdout?.on('data', (chunk) => {
@@ -133,31 +158,10 @@ function startPythonDaemon(): void {
 
     proc.on('close', (code) => {
       pythonDaemon = null;
-      if (
-        code !== 0 &&
-        (stderrBuf.includes('No module named') || stderrBuf.includes('ImportError')) &&
-        !isBootstrappingPython
-      ) {
-        isBootstrappingPython = true;
-        console.log('[ChoirMate Server] Bootstrapping missing Python OMR/SmolLM2/PDF dependencies...');
-        const bootstrapCmd = [
-          'python3 -m pip --version >/dev/null 2>&1 || (curl -sS https://bootstrap.pypa.io/get-pip.py | python3 - --no-cache-dir)',
-          'python3 -m pip install --no-cache-dir --root-user-action=ignore --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu homr==0.6.2 pypdfium2 fastapi uvicorn pydantic pillow scipy "opencv-python-headless<5.0" huggingface-hub llama-cpp-python requests',
-        ].join(' && ');
-
-        const bootProc = spawn('sh', ['-c', bootstrapCmd], {
-          cwd: __dirname,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        bootProc.on('close', (bootCode) => {
-          isBootstrappingPython = false;
-          console.log(`[ChoirMate Server] Python dependency bootstrap exited with code ${bootCode}`);
-          if (bootCode === 0) {
-            setTimeout(() => startPythonDaemon(), 1000);
-          }
-        });
-      }
+      console.log(`[ChoirMate Server] Python service closed (code ${code}). Node.js + Gemini active.`);
     });
+  }).catch((err) => {
+    console.warn('[ChoirMate Server] Python health check skipped:', err?.message);
   });
 }
 
@@ -558,8 +562,8 @@ app.post('/api/analyze-sheet', async (req, res) => {
       startPythonDaemon();
     }
 
-    const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
-    const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
+    const pythonScript = path.resolve(rootDir, 'python', 'analyze.py');
+    const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: rootDir });
 
     const triggerGeminiFallback = async () => {
       try {
@@ -696,8 +700,8 @@ app.post('/api/recalculate-score', async (req, res) => {
       startPythonDaemon();
     }
 
-    const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
-    const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
+    const pythonScript = path.resolve(rootDir, 'python', 'analyze.py');
+    const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: rootDir });
     let stdoutData = '';
     let stderrData = '';
     pythonProcess.stdout.on('data', (chunk) => {
@@ -817,8 +821,8 @@ app.post('/api/export-audio', async (req, res) => {
       startPythonDaemon();
     }
 
-    const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
-    const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
+    const pythonScript = path.resolve(rootDir, 'python', 'analyze.py');
+    const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: rootDir });
     let stdoutData = '';
     let stderrData = '';
     pythonProcess.stdout.on('data', (chunk) => {
@@ -955,8 +959,8 @@ async function askSmolLM2Teacher(payload: Record<string, any>): Promise<any> {
   }
 
   return new Promise((resolve, reject) => {
-    const pythonScript = path.resolve(__dirname, 'python', 'analyze.py');
-    const proc = spawn('python3', [pythonScript, '-'], { cwd: __dirname });
+    const pythonScript = path.resolve(rootDir, 'python', 'analyze.py');
+    const proc = spawn('python3', [pythonScript, '-'], { cwd: rootDir });
     let out = '';
     proc.on('error', (err: any) => {
       console.warn('[ChoirMate Server] python3 not available for askSmolLM2Teacher, returning fallback coaching:', err.message);
@@ -1083,33 +1087,33 @@ app.post('/api/voice-assistant/ask', async (req, res) => {
 async function startServer() {
   startPythonDaemon();
 
-  const distHtmlPath = path.join(__dirname, 'dist', 'index.html');
-  const hasDist = fs.existsSync(distHtmlPath);
-  const rootHtmlPath = path.join(__dirname, 'index.html');
-  const hasRootIndex = fs.existsSync(rootHtmlPath);
+  const distHtmlInRoot = path.join(rootDir, 'dist', 'index.html');
+  const distHtmlInCurrent = path.join(__dirname, 'index.html');
+  const distIndexHtml = fs.existsSync(distHtmlInRoot)
+    ? distHtmlInRoot
+    : fs.existsSync(distHtmlInCurrent)
+    ? distHtmlInCurrent
+    : null;
+  const distDir = distIndexHtml ? path.dirname(distIndexHtml) : null;
 
-  if (hasDist) {
-    app.use(express.static(path.join(__dirname, 'dist')));
+  if (distIndexHtml && distDir) {
+    console.log('[ChoirMate Server] Serving static build from:', distDir);
+    app.use(express.static(distDir));
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api/')) {
         return next();
       }
-      res.sendFile(distHtmlPath);
+      res.sendFile(distIndexHtml);
     });
-  } else if (hasRootIndex) {
+  } else {
+    console.log('[ChoirMate Server] Mounting Vite development middleware...');
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
+      root: rootDir,
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    app.get('*', (req, res, next) => {
-      if (req.path.startsWith('/api/')) {
-        return next();
-      }
-      res.status(200).json({ status: 'ok', service: 'ChoirMate AI Backend API' });
-    });
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {

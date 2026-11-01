@@ -486,6 +486,14 @@ def parse_musicxml_string(
                         prev_ev['solfaLetter'] = solfa_letter
                         prev_ev['frequency'] = freq
                         prev_ev['_midi'] = curr_midi
+                        _, _, rhythm_word = get_duration_info(
+                            duration_beats,
+                            xml_type=xml_type,
+                            dots=dots_count,
+                            is_rest=False,
+                            is_tuplet=is_tuplet,
+                        )
+                        prev_ev['singingTip'] = f'Sing {solfa_syl} ({pitch_str}) for {duration_beats:g} beat{"s" if duration_beats != 1 else ""} ({rhythm_word}).'
                     continue
 
                 duration_name, audio_type, rhythm_word = get_duration_info(
@@ -804,3 +812,46 @@ def recalculate_corrected_notes(
 
     updated_score['parts'] = parts
     return updated_score
+
+
+def test_chord_singing_tip_regression() -> None:
+    """Regression tests for chord singingTip replacement."""
+    xml_b4 = """<?xml version="1.0" encoding="UTF-8"?>
+    <score-partwise version="3.1">
+      <part-list><score-part id="P1"><part-name>Soprano</part-name></score-part></part-list>
+      <part id="P1">
+        <measure number="1">
+          <attributes><divisions>4</divisions><key><fifths>1</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+          <note><pitch><step>D</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type></note>
+          <note><chord/><pitch><step>B</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type></note>
+        </measure>
+      </part>
+    </score-partwise>"""
+    res_b4 = parse_musicxml_string(xml_b4)
+    note_b4 = res_b4['parts'][0]['notes'][0]
+    assert note_b4['pitch'] == 'B4', f"Expected B4, got {note_b4['pitch']}"
+    assert note_b4['solfa'] == 'Mi', f"Expected Mi, got {note_b4['solfa']}"
+    assert 'Mi (B4)' in note_b4['singingTip'], f"Expected singingTip to contain 'Mi (B4)', got '{note_b4['singingTip']}'"
+    assert 'Sol (D4)' not in note_b4['singingTip'], f"Singing tip should not reference Sol (D4), got '{note_b4['singingTip']}'"
+
+    xml_a4 = """<?xml version="1.0" encoding="UTF-8"?>
+    <score-partwise version="3.1">
+      <part-list><score-part id="P1"><part-name>Soprano</part-name></score-part></part-list>
+      <part id="P1">
+        <measure number="1">
+          <attributes><divisions>4</divisions><key><fifths>1</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+          <note><pitch><step>D</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type></note>
+          <note><chord/><pitch><step>A</step><octave>4</octave></pitch><duration>4</duration><type>quarter</type></note>
+        </measure>
+      </part>
+    </score-partwise>"""
+    res_a4 = parse_musicxml_string(xml_a4)
+    note_a4 = res_a4['parts'][0]['notes'][0]
+    assert note_a4['pitch'] == 'A4', f"Expected A4, got {note_a4['pitch']}"
+    assert note_a4['solfa'] == 'Re', f"Expected Re, got {note_a4['solfa']}"
+    assert 'Re (A4)' in note_a4['singingTip'], f"Expected singingTip to contain 'Re (A4)', got '{note_a4['singingTip']}'"
+
+    print("SUCCESS: Chord singingTip regression tests passed!")
+
+if __name__ == '__main__':
+    test_chord_singing_tip_regression()
