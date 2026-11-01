@@ -466,6 +466,14 @@ def parse_musicxml_string(
                 curr_midi = pitch_to_midi(step_letter, alter_val, octave_val)
                 solfa_syl, solfa_letter = get_solfa_syllable(step_letter, alter_val, octave_val, tonic_semi)
 
+                duration_name, audio_type, rhythm_word = get_duration_info(
+                    duration_beats,
+                    xml_type=xml_type,
+                    dots=dots_count,
+                    is_rest=False,
+                    is_tuplet=is_tuplet,
+                )
+
                 if is_chord_tone and measure_events and not measure_events[-1].get('isRest'):
                     prev_ev = measure_events[-1]
                     chord_pitches = prev_ev.get('chordPitches') or [prev_ev['pitch']]
@@ -486,23 +494,8 @@ def parse_musicxml_string(
                         prev_ev['solfaLetter'] = solfa_letter
                         prev_ev['frequency'] = freq
                         prev_ev['_midi'] = curr_midi
-                        _, _, rhythm_word = get_duration_info(
-                            duration_beats,
-                            xml_type=xml_type,
-                            dots=dots_count,
-                            is_rest=False,
-                            is_tuplet=is_tuplet,
-                        )
                         prev_ev['singingTip'] = f'Sing {solfa_syl} ({pitch_str}) for {duration_beats:g} beat{"s" if duration_beats != 1 else ""} ({rhythm_word}).'
                     continue
-
-                duration_name, audio_type, rhythm_word = get_duration_info(
-                    duration_beats,
-                    xml_type=xml_type,
-                    dots=dots_count,
-                    is_rest=False,
-                    is_tuplet=is_tuplet,
-                )
 
                 lyric_text = ''
                 lyric_el = note_el.find('lyric')
