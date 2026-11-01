@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def submit(args: argparse.Namespace) -> None:
-    import camber
+    import camber.base
 
     input_path = Path(args.input).expanduser().resolve()
     if not input_path.is_file():
@@ -70,10 +70,6 @@ def submit(args: argparse.Namespace) -> None:
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     staged_input = input_dir / input_path.name
-
-    # The notebook directory is already inside the private Stash mount.
-    # Use a normal filesystem copy, not stash.cp(), which can self-copy
-    # when source and destination are on the same mounted filesystem.
     shutil.copy2(input_path, staged_input)
 
     relative_input = Path("choirmate") / "jobs" / run_id / "input" / input_path.name
@@ -120,7 +116,7 @@ def submit(args: argparse.Namespace) -> None:
 
 
 def show_status(args: argparse.Namespace) -> None:
-    import camber
+    import camber.job
 
     job = camber.job.get_job(job_id=args.job_id)
     print(f"job_id: {job.job_id}")
@@ -132,7 +128,7 @@ def show_status(args: argparse.Namespace) -> None:
 
 
 def retrieve(args: argparse.Namespace) -> None:
-    import camber
+    import camber.job
 
     if not args.confirm_complete:
         raise SystemExit("Check the Camber dashboard first, then rerun with --confirm-complete.")
