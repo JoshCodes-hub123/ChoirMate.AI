@@ -22,7 +22,6 @@ from pathlib import Path
 
 
 REPOSITORY_URL = "https://github.com/JoshCodes-hub123/ChoirMate.AI.git"
-CPU_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +82,11 @@ def submit(args: argparse.Namespace) -> None:
     command_parts = [
         f"git clone --branch main --depth 1 {shlex.quote(REPOSITORY_URL)} repo",
         "cd repo",
-        f"python -m pip install --no-cache-dir --extra-index-url {shlex.quote(CPU_WHEEL_INDEX)} -r python/requirements.txt",
+        # SmolLM2 is deliberately disabled for the first run. Exclude the
+        # optional llama-cpp-python package so pip cannot attempt a large
+        # native source build on a small CPU node.
+        "grep -v '^llama-cpp-python' python/requirements.txt > /tmp/choirmate-camber-requirements.txt",
+        "python -m pip install --no-cache-dir -r /tmp/choirmate-camber-requirements.txt",
         (
             "python python/camber_worker.py"
             f" --input {shlex.quote('../' + input_dir + '/' + input_name)}"
