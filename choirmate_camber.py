@@ -147,7 +147,8 @@ def retrieve(args: argparse.Namespace) -> None:
         )
 
     job = camber.job.get_job(job_id=args.job_id)
-    status_value = str(job.status).upper()
+    raw_status = getattr(job.status, "value", job.status)
+    status_value = str(raw_status).upper().strip().split(".")[-1]
     successful_states = {"SUCCEEDED", "SUCCESS", "COMPLETED", "COMPLETE", "DONE"}
     if status_value not in successful_states:
         try:
