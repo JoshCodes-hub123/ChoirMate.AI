@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
         description="Analyze a sheet-music file and export practice audio."
     )
     parser.add_argument("--input", required=True, help="Local PDF, image, XML, or MusicXML file")
+    parser.add_argument("--run-id", default=None, help="Unique Camber job/run identifier")
     parser.add_argument("--output-dir", default="./choirmate-output", help="Directory for results")
     parser.add_argument("--title", default=None, help="Score title (defaults to the input filename)")
     parser.add_argument("--composer", default="Unknown Composer", help="Composer name")
@@ -157,6 +158,7 @@ def main() -> int:
 
     manifest = {
         "success": True,
+        "runId": args.run_id,
         "inputFile": input_path.name,
         "title": title,
         "notesDetected": len(notes),
