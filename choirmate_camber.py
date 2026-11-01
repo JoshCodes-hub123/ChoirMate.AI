@@ -22,6 +22,7 @@ from pathlib import Path
 
 
 REPOSITORY_URL = "https://github.com/JoshCodes-hub123/ChoirMate.AI.git"
+REPOSITORY_BRANCH = "feat/camber-batch-pipeline"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,14 +78,13 @@ def submit(args: argparse.Namespace) -> None:
     stash.mkdir(input_dir)
     stash.cp(src_path=str(input_path), dest_path=f"{input_dir}/{input_name}")
 
-    # Paths are relative to the Stash-mirrored working directory. The job
-    # starts in that directory by default, then clones the public repo into ./repo.
+    # The job uses the default mounted working directory. Stash paths are
+    # plain relative paths in that mounted filesystem, not stash:// URIs.
     command_parts = [
-        f"git clone --branch main --depth 1 {shlex.quote(REPOSITORY_URL)} repo",
+        f"git clone --branch {shlex.quote(REPOSITORY_BRANCH)} --depth 1 {shlex.quote(REPOSITORY_URL)} repo",
         "cd repo",
-        # SmolLM2 is deliberately disabled for the first run. Exclude the
-        # optional llama-cpp-python package so pip cannot attempt a large
-        # native source build on a small CPU node.
+        # SmolLM2 is disabled for the first run. Excluding llama-cpp-python
+        # avoids a potentially expensive native build on the small CPU node.
         "grep -v '^llama-cpp-python' python/requirements.txt > /tmp/choirmate-camber-requirements.txt",
         "python -m pip install --no-cache-dir -r /tmp/choirmate-camber-requirements.txt",
         (
@@ -107,8 +107,6 @@ def submit(args: argparse.Namespace) -> None:
         node_size="XXSMALL",
         extra_env_vars={
             "CHOIRMATE_RUN_ID": run_id,
-            # Keep the first test deterministic and avoid an unrequested model download.
-            # The existing service still produces structured, data-grounded explanations.
             "SMOLLM2_ENABLED": "0",
             "SMOLLM2_AUTO_DOWNLOAD": "0",
         },
