@@ -102,6 +102,20 @@ async function checkPythonServiceHealth(): Promise<{ active: boolean; modelLoade
   return { active: false, modelLoaded: false };
 }
 
+async function ensurePythonServiceActive(): Promise<boolean> {
+  let health = await checkPythonServiceHealth();
+  if (health.active) return true;
+
+  startPythonDaemon();
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await new Promise((r) => setTimeout(r, 500));
+    health = await checkPythonServiceHealth();
+    if (health.active) return true;
+  }
+  return false;
+}
+
 function startPythonDaemon(): void {
   if (pythonDaemon || isBootstrappingPython) return;
 
@@ -230,6 +244,8 @@ app.post('/api/preview-pdf', async (req, res) => {
       pdfBase64,
       fileName: fileName || 'score.pdf',
     };
+
+    await ensurePythonServiceActive();
 
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/preview-pdf`, {
@@ -512,17 +528,7 @@ app.post('/api/analyze-sheet', async (req, res) => {
       tempo: tempo || 76,
     };
 
-    const geminiApiKey = (process.env.GEMINI_API_KEY || process.env.API_KEY || '').trim();
-    if (geminiApiKey) {
-      try {
-        console.log('[ChoirMate Server] Processing uploaded score with Gemini Vision OMR (gemini-3.8-flash)...');
-        const geminiResult = await processScoreWithGeminiFallback(payload);
-        sheetAnalysisCache.set(cacheKey, geminiResult);
-        return res.json(geminiResult);
-      } catch (geminiVisionErr: any) {
-        console.warn('[ChoirMate Server] Gemini Vision OMR error, proceeding to primary OMR engine:', geminiVisionErr?.message);
-      }
-    }
+    await ensurePythonServiceActive();
 
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/analyze`, {
@@ -542,15 +548,14 @@ app.post('/api/analyze-sheet', async (req, res) => {
           }
           sheetAnalysisCache.set(cacheKey, pyJson);
           return res.json(pyJson);
-        } else if (pyJson && typeof pyJson.error === 'string') {
+        } else {
           return res.status(422).json({
             success: false,
-            errorCode: pyJson.errorCode || 'OMR_RECOGNITION_FAILED',
-            error: pyJson.error,
-            sectionDiagnostics: pyJson.sectionDiagnostics || [],
+            errorCode: pyJson?.errorCode || 'OMR_RECOGNITION_FAILED',
+            error: pyJson?.error || 'HOMR Optical Music Recognition could not decode valid musical notes from the uploaded score.',
+            sectionDiagnostics: pyJson?.sectionDiagnostics || [],
             omrAttempted: true,
             recognitionEngine: 'HOMR',
-            aiTeacher: 'SmolLM2-360M-Instruct-GGUF',
           });
         }
       }
@@ -559,50 +564,10 @@ app.post('/api/analyze-sheet', async (req, res) => {
         '[ChoirMate Server] Python FastAPI service on port 5001 unreachable, falling back to python/analyze.py CLI:',
         httpErr instanceof Error ? httpErr.message : httpErr
       );
-      startPythonDaemon();
     }
 
     const pythonScript = path.resolve(rootDir, 'python', 'analyze.py');
     const pythonProcess = spawn('python3', [pythonScript, '-'], { cwd: rootDir });
-
-    const triggerGeminiFallback = async () => {
-      try {
-        if (process.env.GEMINI_API_KEY) {
-          console.log('[ChoirMate Server] Primary engine unavailable/failed. Activating Gemini fallback...');
-          const geminiResult = await processScoreWithGeminiFallback(payload);
-          sheetAnalysisCache.set(cacheKey, geminiResult);
-          return res.json(geminiResult);
-        }
-      } catch (geminiErr: any) {
-        console.warn('[ChoirMate Server] Gemini fallback failed, using robust structural score fallback:', geminiErr?.message);
-      }
-
-      const fallbackSample = SAMPLE_SCORES[0];
-      const resultData = {
-        ...fallbackSample,
-        id: 'uploaded_score_' + Date.now(),
-        title: title || 'Uploaded Choral Score',
-        composer: composer || 'Arr. Choral Conservatory',
-        tempo: tempo ? Number(tempo) : fallbackSample.tempo,
-        source: 'adaptive_score_engine',
-        isDemonstration: false,
-        imageUrl: pageImages[0] || imageBase64 || undefined,
-        pageImages: pageImages.length > 0 ? pageImages : undefined,
-      };
-      const finalRes = {
-        success: true,
-        data: resultData,
-        source: 'adaptive_score_engine',
-        processingProvider: 'Adaptive Music Analysis Engine',
-      };
-      sheetAnalysisCache.set(cacheKey, finalRes);
-      return res.json(finalRes);
-    };
-
-    pythonProcess.on('error', async (err: any) => {
-      console.warn('[ChoirMate Server] python3 not available for analyze-sheet, attempting Gemini fallback:', err.message);
-      return await triggerGeminiFallback();
-    });
 
     let stdoutData = '';
     let stderrData = '';
@@ -615,14 +580,16 @@ app.post('/api/analyze-sheet', async (req, res) => {
       stderrData += chunk.toString();
     });
 
-    pythonProcess.on('close', async (code) => {
+    pythonProcess.on('close', (code) => {
       if (stderrData.trim()) {
         console.error('[Python CLI stderr]:', stderrData.trim());
       }
 
       if (!stdoutData.trim()) {
-        console.warn('[ChoirMate Server] Python CLI returned empty stdout. Attempting Gemini fallback...');
-        return await triggerGeminiFallback();
+        return res.status(500).json({
+          success: false,
+          error: 'HOMR OMR recognition process produced no output.',
+        });
       }
 
       try {
@@ -632,14 +599,20 @@ app.post('/api/analyze-sheet', async (req, res) => {
             parsed.data.imageUrl = pageImages[0];
             parsed.data.pageImages = pageImages;
           }
+          sheetAnalysisCache.set(cacheKey, parsed);
           return res.json(parsed);
         } else {
-          console.warn('[ChoirMate Server] Python CLI OMR recognition failed. Attempting Gemini fallback...');
-          return await triggerGeminiFallback();
+          return res.status(422).json({
+            success: false,
+            error: parsed.error || 'HOMR Optical Music Recognition failed to decode notes from the score.',
+          });
         }
       } catch (parseError) {
-        console.error('Failed to parse Python pipeline JSON output, attempting Gemini fallback:', stdoutData, parseError);
-        return await triggerGeminiFallback();
+        console.error('Failed to parse Python pipeline JSON output:', stdoutData, parseError);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to parse HOMR OMR recognition response.',
+        });
       }
     });
 
@@ -671,6 +644,8 @@ app.post('/api/recalculate-score', async (req, res) => {
       updatedNotes,
       fifths,
     };
+
+    await ensurePythonServiceActive();
 
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/recalculate`, {
@@ -792,6 +767,8 @@ app.post('/api/export-audio', async (req, res) => {
     if (cached) {
       return sendExportResult(cached);
     }
+
+    await ensurePythonServiceActive();
 
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/export-audio`, {
