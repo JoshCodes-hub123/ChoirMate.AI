@@ -17,6 +17,11 @@ const PracticeMode = lazy(() =>
   import('./components/PracticeMode').then((m) => ({ default: m.PracticeMode }))
 );
 
+const VoiceStudio = lazy(() =>
+  import('./components/VoiceStudio').then((m) => ({
+    default: m.VoiceStudio,
+  }))
+);
 const WorkspaceLoader: React.FC<{ label: string }> = ({ label }) => (
   <div className="min-h-[420px] flex flex-col items-center justify-center p-8 text-center space-y-4 animate-in fade-in duration-200">
     <div className="w-10 h-10 rounded-full border-3 border-[#143826]/20 border-t-[#143826] animate-spin" />
@@ -28,7 +33,7 @@ const WorkspaceLoader: React.FC<{ label: string }> = ({ label }) => (
 );
 
 export function App() {
-  const [currentScreen, setCurrentScreen] = useState<'home' | 'workspace' | 'results' | 'practice'>('home');
+  const [currentScreen, setCurrentScreen] = useState<'home' | 'workspace' | 'results' | 'practice' | 'voice-studio'>('home');
   const [currentScore, setCurrentScore] = useState<ScoreAnalysis | null>(
     SAMPLE_SCORES[0] || null
   );
@@ -93,12 +98,20 @@ export function App() {
             />
           </Suspense>
         )}
+        {currentScreen === 'voice-studio' && currentScore && (
+          <Suspense fallback={<WorkspaceLoader label="Loading Voice Studio" />}>
+            <VoiceStudio
+              score={currentScore}
+              onBackToLearn={() => setCurrentScreen('results')}
+            />
+          </Suspense>
+        )}
       </main>
 
       <footer className="border-t border-[#E8E0D0] bg-[#FAF5ED] py-6 px-4 sm:px-8 lg:px-12 mt-12">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#637269]">
           <p className="font-serif font-semibold text-[#143826]">
-            ChoirMate AI — Full-Score Optical Music Recognition, Multi-Part Solfa &amp; Sight-Singing Tutor
+            ChoirMate AI Ã¢â‚¬â€ Full-Score Optical Music Recognition, Multi-Part Solfa &amp; Sight-Singing Tutor
           </p>
           <p>
             Powered by Open-Weight HOMR (Multi-System MusicXML OMR) &amp; SmolLM2-360M-Instruct-GGUF

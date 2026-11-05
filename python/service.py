@@ -519,4 +519,3 @@ def ask_teacher_endpoint(req: AskTeacherRequest):
             "errorCode": "TEACHER_QA_FAILED",
             "error": "Could not generate a coaching response right now. Please try again.",
         }
-

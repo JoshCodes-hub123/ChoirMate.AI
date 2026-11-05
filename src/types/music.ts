@@ -192,6 +192,7 @@ export interface RecognitionSummary {
 }
 
 export interface ScoreAnalysis {
+  processingProvider?: string;
   id: string;
   title: string;
   composer?: string;

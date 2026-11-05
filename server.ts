@@ -202,6 +202,31 @@ app.get('/api/health', async (_req, res) => {
   });
 });
 
+for (const endpoint of ['voices', 'audio'] as const) {
+  app.post(`/api/voice-studio/${endpoint}`, async (req, res) => {
+    try {
+      const pyResponse = await fetch(
+        `${PYTHON_SERVICE_URL}/voice-studio/${endpoint}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req.body),
+          signal: AbortSignal.timeout(120000),
+        }
+      );
+
+      const result = await pyResponse.json();
+      return res.status(pyResponse.status).json(result);
+    } catch (error) {
+      console.error('[Voice Studio] Request failed:', error);
+      return res.status(503).json({
+        success: false,
+        errorCode: 'VOICE_STUDIO_UNAVAILABLE',
+        error: 'Voice Studio is temporarily unavailable. Please try again.',
+      });
+    }
+  });
+}
 app.post('/api/preview-pdf', async (req, res) => {
   try {
     const { pdfBase64, fileName } = req.body || {};
@@ -1138,4 +1163,5 @@ async function startServer() {
 }
 
 startServer();
+
 
