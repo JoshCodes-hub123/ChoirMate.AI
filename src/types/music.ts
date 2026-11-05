@@ -196,6 +196,7 @@ export interface ScoreAnalysis {
   title: string;
   composer?: string;
   source?: string;
+  processingProvider?: string;
   isDemonstration?: boolean;
   demonstrationNotice?: string;
   clef: 'treble' | 'bass';
