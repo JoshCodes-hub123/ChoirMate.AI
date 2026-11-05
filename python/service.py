@@ -10,9 +10,20 @@ import sys
 import threading
 import traceback
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+try:
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    HAS_FASTAPI = True
+except ImportError:
+    HAS_FASTAPI = False
+    class FastAPI:
+        def __init__(self, *args, **kwargs): pass
+        def get(self, *args, **kwargs): return lambda f: f
+        def post(self, *args, **kwargs): return lambda f: f
+        def add_middleware(self, *args, **kwargs): pass
+    class CORSMiddleware: pass
+    class BaseModel: pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from music_theory import parse_musicxml_string, recalculate_corrected_notes
@@ -519,3 +530,40 @@ def ask_teacher_endpoint(req: AskTeacherRequest):
             "errorCode": "TEACHER_QA_FAILED",
             "error": "Could not generate a coaching response right now. Please try again.",
         }
+
+
+if __name__ == "__main__":
+    try:
+        import uvicorn
+        uvicorn.run(app, host="127.0.0.1", port=5001)
+    except ImportError:
+        import json
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        class SimpleHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/health":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    resp = {
+                        "status": "ok",
+                        "service": "ChoirMate Open-Weight Python Service (Fallback HTTP)",
+                        "host": "127.0.0.1",
+                        "port": 5001,
+                        "modelLoaded": False
+                    }
+                    self.wfile.write(json.dumps(resp).encode("utf-8"))
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+            def do_POST(self):
+                if self.path == "/health":
+                    self.do_GET()
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+        server = HTTPServer(("127.0.0.1", 5001), SimpleHandler)
+        print("[Python Service] Uvicorn not found, running lightweight fallback HTTP server on 127.0.0.1:5001")
+        server.serve_forever()
+
+
