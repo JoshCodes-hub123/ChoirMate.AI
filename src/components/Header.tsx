@@ -1,30 +1,37 @@
+
 import React, { useState } from 'react';
-import { X, Check, User, Presentation } from 'lucide-react';
+import { X, Check, User, Presentation, AudioLines } from 'lucide-react';
+
+type Screen = 'home' | 'workspace' | 'results' | 'practice' | 'voice-studio';
 
 interface HeaderProps {
-  currentScreen?: 'home' | 'workspace' | 'results' | 'practice';
-  onNavigate?: (screen: 'home' | 'workspace' | 'results' | 'practice') => void;
+  currentScreen?: Screen;
+  onNavigate?: (screen: Screen) => void;
   hasScore?: boolean;
   onOpenPitchDeck?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  currentScreen,
   onNavigate,
+  hasScore = false,
   onOpenPitchDeck,
 }) => {
   const [showSignInModal, setShowSignInModal] = useState(false);
   const [userRole, setUserRole] = useState<'guest' | 'chorister' | 'director'>('chorister');
   const [signedIn, setSignedIn] = useState(false);
 
+  const isVoiceStudio = currentScreen === 'voice-studio';
+
   return (
     <>
       <header className="sticky top-0 z-30 bg-[#FAF5ED]/95 backdrop-blur-md border-b border-[#E8E0D0]/80 transition-colors">
-        <div className="max-w-7xl mx-auto px-6 sm:px-10 lg:px-14 min-h-[72px] flex items-center justify-between">
-          {/* Left: Sole ChoirMate AI Logo Mark (no text beside it) */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-10 lg:px-14 min-h-[72px] flex items-center justify-between gap-3">
+          {/* ChoirMate logo */}
           <button
             type="button"
             onClick={() => onNavigate?.('home')}
-            className="flex items-center text-left group cursor-pointer focus:outline-none min-h-[44px] transition-transform hover:opacity-90 active:scale-[0.98]"
+            className="flex items-center text-left group cursor-pointer focus:outline-none min-h-[44px] shrink-0 transition-transform hover:opacity-90 active:scale-[0.98]"
             aria-label="ChoirMate Home"
           >
             <img
@@ -38,27 +45,45 @@ export const Header: React.FC<HeaderProps> = ({
             />
           </button>
 
-          {/* Right: Pitch Deck & Sign in Actions */}
-          <div className="flex items-center gap-3">
+          {/* Navigation and actions */}
+          <div className="flex items-center justify-end gap-2 sm:gap-3 min-w-0">
+            {hasScore && (
+              <button
+                type="button"
+                onClick={() => onNavigate?.('voice-studio')}
+                aria-current={isVoiceStudio ? 'page' : undefined}
+                className={`min-h-[42px] px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-[0.98] ${
+                  isVoiceStudio
+                    ? 'bg-[#143826] text-white shadow-sm'
+                    : 'border border-[#143826]/25 bg-white/60 text-[#143826] hover:bg-[#E7EDE7]'
+                }`}
+              >
+                <AudioLines className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline">Voice Studio</span>
+                <span className="sm:hidden">Studio</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => onOpenPitchDeck?.()}
-              className="min-h-[42px] px-4 py-2 rounded-full bg-[#9E7B35] text-white hover:bg-[#85672B] text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.98]"
+              className="min-h-[42px] px-3 sm:px-4 py-2 rounded-full bg-[#9E7B35] text-white hover:bg-[#85672B] text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.98]"
             >
-              <Presentation className="w-4 h-4" />
-              <span className="hidden sm:inline">OPEN//BUILD Pitch Deck</span>
-              <span className="sm:hidden">Pitch Deck</span>
+              <Presentation className="w-4 h-4 shrink-0" />
+              <span className="hidden lg:inline">OPEN//BUILD Pitch Deck</span>
+              <span className="hidden sm:inline lg:hidden">Pitch Deck</span>
+              <span className="sr-only sm:hidden">Pitch Deck</span>
             </button>
 
             <button
               type="button"
               onClick={() => setShowSignInModal(true)}
-              className="min-h-[42px] px-5 py-2 rounded-full border border-[#143826] text-[#143826] hover:bg-[#143826]/5 text-sm font-medium transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
+              className="min-h-[42px] px-3 sm:px-5 py-2 rounded-full border border-[#143826] text-[#143826] hover:bg-[#143826]/5 text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
             >
               {signedIn ? (
                 <>
-                  <User className="w-4 h-4 text-[#143826]" />
-                  <span className="capitalize">{userRole}</span>
+                  <User className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline capitalize">{userRole}</span>
                 </>
               ) : (
                 <span>Sign in</span>
@@ -74,8 +99,9 @@ export const Header: React.FC<HeaderProps> = ({
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs"
           role="dialog"
           aria-modal="true"
+          aria-labelledby="choirmate-signin-title"
         >
-          <div className="bg-[#FAF5ED] border border-[#E4DCCF] rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl relative text-[#16221A] animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#FAF5ED] border border-[#E4DCCF] rounded-3xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl relative text-[#16221A] animate-in fade-in zoom-in-95 duration-150">
             <button
               type="button"
               onClick={() => setShowSignInModal(false)}
@@ -85,13 +111,18 @@ export const Header: React.FC<HeaderProps> = ({
               <X className="w-5 h-5" />
             </button>
 
-            <div className="mb-5">
+            <div className="mb-5 pr-7">
               <span className="text-[11px] font-bold uppercase tracking-wider text-[#9E7B35]">
                 OPEN//BUILD 2026 • Chorister Pass
               </span>
-              <h3 className="font-serif text-2xl font-bold text-[#143826] mt-1">
+
+              <h3
+                id="choirmate-signin-title"
+                className="font-serif text-2xl font-bold text-[#143826] mt-1"
+              >
                 Welcome to ChoirMate AI
               </h3>
+
               <p className="text-xs text-[#506056] mt-2 leading-relaxed">
                 Save rehearsal recordings, track vocal pitch progress, and synchronize scores across your choir section.
               </p>
@@ -99,14 +130,29 @@ export const Header: React.FC<HeaderProps> = ({
 
             <div className="space-y-3 mb-6">
               {[
-                { id: 'chorister', label: 'Chorister (Soprano / Alto / Tenor / Bass)', desc: 'Practise vocal parts with solfa and pitch feedback' },
-                { id: 'director', label: 'Choir Director / Conductor', desc: 'Distribute rehearsal MP3s, correct notes, and export scores' },
-                { id: 'guest', label: 'Guest Sight-Singer', desc: 'Immediate instant access with no account required' },
+                {
+                  id: 'chorister',
+                  label: 'Chorister (Soprano / Alto / Tenor / Bass)',
+                  desc: 'Practise vocal parts with solfa and pitch feedback',
+                },
+                {
+                  id: 'director',
+                  label: 'Choir Director / Conductor',
+                  desc: 'Distribute rehearsal MP3s, correct notes, and export scores',
+                },
+                {
+                  id: 'guest',
+                  label: 'Guest Sight-Singer',
+                  desc: 'Immediate instant access with no account required',
+                },
               ].map((role) => (
                 <button
                   key={role.id}
                   type="button"
-                  onClick={() => setUserRole(role.id as 'guest' | 'chorister' | 'director')}
+                  onClick={() =>
+                    setUserRole(role.id as 'guest' | 'chorister' | 'director')
+                  }
+                  aria-pressed={userRole === role.id}
                   className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-3 ${
                     userRole === role.id
                       ? 'border-[#143826] bg-[#143826]/5 shadow-xs'
@@ -114,9 +160,14 @@ export const Header: React.FC<HeaderProps> = ({
                   }`}
                 >
                   <div>
-                    <p className="text-xs font-semibold text-[#143826]">{role.label}</p>
-                    <p className="text-[11px] text-[#637269] mt-0.5">{role.desc}</p>
+                    <p className="text-xs font-semibold text-[#143826]">
+                      {role.label}
+                    </p>
+                    <p className="text-[11px] text-[#637269] mt-0.5">
+                      {role.desc}
+                    </p>
                   </div>
+
                   {userRole === role.id && (
                     <div className="w-5 h-5 rounded-full bg-[#143826] text-white flex items-center justify-center shrink-0 mt-0.5">
                       <Check className="w-3 h-3" />
@@ -135,8 +186,10 @@ export const Header: React.FC<HeaderProps> = ({
                 }}
                 className="flex-1 py-3 px-4 rounded-full bg-[#143826] hover:bg-[#1B4A34] text-white font-medium text-xs transition-colors cursor-pointer"
               >
-                Continue as {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
+                Continue as{' '}
+                {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
               </button>
+
               <button
                 type="button"
                 onClick={() => setShowSignInModal(false)}

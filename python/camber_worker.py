@@ -114,47 +114,51 @@ def main() -> int:
     )
 
     notes = score.get("notes") or []
-    if not notes:
-        print("[ChoirMate worker] No notes were available for audio export.", file=sys.stderr)
-        return 1
+    audio_file_name = None
+    audio_export_success = False
 
-    print(f"[ChoirMate worker] Exporting {args.audio_format.upper()} practice audio...", flush=True)
-    try:
-        audio_result = export_audio_endpoint(
-            ExportAudioRequest(
-                notes=notes,
-                title=title,
-                partName="Full Score",
-                scopeLabel="Full Song",
-                tempo=args.tempo,
-                voice=args.voice,
-                format=args.audio_format,
-                metronome=args.metronome,
+    if notes:
+        print(f"[ChoirMate worker] Exporting {args.audio_format.upper()} practice audio...", flush=True)
+        try:
+            audio_result = export_audio_endpoint(
+                ExportAudioRequest(
+                    notes=notes,
+                    title=title,
+                    partName="Full Score",
+                    scopeLabel="Full Song",
+                    tempo=args.tempo,
+                    voice=args.voice,
+                    format=args.audio_format,
+                    metronome=args.metronome,
+                )
             )
-        )
-    except Exception as exc:
-        print(f"[ChoirMate worker] Audio export crashed: {exc}", file=sys.stderr, flush=True)
-        return 1
+        except Exception as exc:
+            audio_result = {"success": False, "error": f"Audio export crashed: {exc}"}
 
-    if not isinstance(audio_result, dict) or not audio_result.get("success"):
-        error_result = audio_result if isinstance(audio_result, dict) else {
+        if isinstance(audio_result, dict) and audio_result.get("success") and audio_result.get("audioBase64"):
+            audio_path = output_dir / audio_result.get("fileName", f"practice.{args.audio_format}")
+            audio_path.write_bytes(base64.b64decode(audio_result["audioBase64"]))
+            audio_file_name = audio_path.name
+            audio_export_success = True
+            audio_metadata = {key: value for key, value in audio_result.items() if key != "audioBase64"}
+            write_json(output_dir / "audio-metadata.json", audio_metadata)
+        else:
+            error_result = audio_result if isinstance(audio_result, dict) else {
+                "success": False,
+                "error": "The audio exporter returned an unexpected response.",
+            }
+            write_json(output_dir / "audio-error.json", error_result)
+            print(
+                f"[ChoirMate worker] Audio export unavailable: {error_result.get('error', 'Unknown error')}",
+                file=sys.stderr,
+                flush=True,
+            )
+    else:
+        write_json(output_dir / "audio-error.json", {
             "success": False,
-            "error": "The audio exporter returned an unexpected response.",
-        }
-        write_json(output_dir / "audio-error.json", error_result)
-        print(f"[ChoirMate worker] Audio export failed: {error_result.get('error', 'Unknown error')}", file=sys.stderr)
-        return 1
-
-    audio_base64 = audio_result.get("audioBase64")
-    if not audio_base64:
-        print("[ChoirMate worker] Audio export returned no audio data.", file=sys.stderr)
-        return 1
-
-    audio_path = output_dir / audio_result.get("fileName", f"practice.{args.audio_format}")
-    audio_path.write_bytes(base64.b64decode(audio_base64))
-
-    audio_metadata = {key: value for key, value in audio_result.items() if key != "audioBase64"}
-    write_json(output_dir / "audio-metadata.json", audio_metadata)
+            "error": "Analysis completed, but no notes were available for audio export.",
+        })
+        print("[ChoirMate worker] Analysis has no notes; preserving analysis output without audio.", flush=True)
 
     manifest = {
         "success": True,
@@ -163,14 +167,18 @@ def main() -> int:
         "title": title,
         "notesDetected": len(notes),
         "analysisFile": "analysis.json",
-        "audioFile": audio_path.name,
-        "audioFormat": args.audio_format,
+        "audioExportSuccess": audio_export_success,
+        "audioFile": audio_file_name,
+        "audioFormat": args.audio_format if audio_export_success else None,
         "tempo": args.tempo,
     }
     write_json(output_dir / "manifest.json", manifest)
 
     print(f"[ChoirMate worker] Finished. Results saved in: {output_dir}", flush=True)
-    print(f"[ChoirMate worker] Audio file: {audio_path.name}", flush=True)
+    if audio_export_success:
+        print(f"[ChoirMate worker] Audio file: {audio_file_name}", flush=True)
+    else:
+        print("[ChoirMate worker] Analysis is available; audio export needs attention.", flush=True)
     return 0
 
 

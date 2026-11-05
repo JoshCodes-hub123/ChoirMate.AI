@@ -31,9 +31,11 @@ from smollm2_teacher import SmolLM2Teacher
 from omr_engine import recognize_score_pages
 from pdf_processor import decode_pdf_base64, render_pdf_document, MAX_PDF_PAGES
 from audio_exporter import export_practice_audio
+from voice_studio_api import router as voice_studio_router
 
 
 app = FastAPI(title="ChoirMate Open-Weight Full-Score Analysis Service")
+app.include_router(voice_studio_router)
 
 app.add_middleware(
     CORSMiddleware,
