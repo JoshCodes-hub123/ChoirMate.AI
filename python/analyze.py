@@ -26,21 +26,33 @@ def run_pipeline() -> None:
     try:
         from music_theory import parse_musicxml_string, recalculate_corrected_notes
         from smollm2_teacher import SmolLM2Teacher
-        from omr_engine import recognize_score_pages
-        from pdf_processor import decode_pdf_base64, render_pdf_document
         from audio_exporter import export_practice_audio
+        from voice_studio import extract_voices
+        from voice_audio import render_voice_audio
     except Exception as imp_err:
-        sys.stderr.write(f"[ChoirMate Analyze] Dependency import error: {imp_err}\n")
+        sys.stderr.write(f"[ChoirMate Analyze] Core module import error: {imp_err}\n")
         traceback.print_exc(file=sys.stderr)
         emit_json_and_exit({
             "success": False,
             "errorCode": "PYTHON_DEPENDENCY_MISSING",
-            "error": (
-                "The Optical Music Recognition Python environment is still initializing or missing required packages. "
-                "Please wait a moment and try again."
-            )
+            "error": f"Python core music engine failed to load: {imp_err}"
         }, 0)
         return
+
+    try:
+        from omr_engine import recognize_score_pages
+        HAS_OMR = True
+    except Exception:
+        HAS_OMR = False
+        recognize_score_pages = None  # type: ignore
+
+    try:
+        from pdf_processor import decode_pdf_base64, render_pdf_document
+        HAS_PDF_PROCESSOR = True
+    except Exception:
+        HAS_PDF_PROCESSOR = False
+        decode_pdf_base64 = None  # type: ignore
+        render_pdf_document = None  # type: ignore
 
     raw_input = ""
     if len(sys.argv) >= 2 and sys.argv[1] != '-':
@@ -276,6 +288,17 @@ def run_pipeline() -> None:
     total_doc_pages = 0
 
     if pdf_base64:
+        if not HAS_PDF_PROCESSOR or decode_pdf_base64 is None or render_pdf_document is None:
+            emit_json_and_exit({
+                'success': False,
+                'errorCode': 'HOMR_ENVIRONMENT_REQUIRED',
+                'error': (
+                    'Sheet music image and PDF recognition is temporarily unavailable because the HOMR Optical Music '
+                    'Recognition engine is currently offline. You can still upload MusicXML (.musicxml or .xml) files '
+                    'for full note analysis, SATB voice extraction, and practice audio generation.'
+                )
+            }, 0)
+            return
         try:
             pdf_bytes = decode_pdf_base64(pdf_base64)
             rendered = render_pdf_document(pdf_bytes, preview_only=False)
@@ -313,6 +336,19 @@ def run_pipeline() -> None:
         total_doc_pages = 1
 
     if page_list:
+        if not HAS_OMR or recognize_score_pages is None:
+            emit_json_and_exit({
+                'success': False,
+                'errorCode': 'HOMR_ENVIRONMENT_REQUIRED',
+                'error': (
+                    'Sheet music image and PDF recognition is temporarily unavailable because the HOMR Optical Music '
+                    'Recognition engine is currently offline. You can still upload MusicXML (.musicxml or .xml) files '
+                    'for full note analysis, SATB voice extraction, and practice audio generation.'
+                ),
+                'omrAttempted': False,
+                'recognitionEngine': 'HOMR (Open-Source OMR)'
+            }, 0)
+            return
         omr_res = recognize_score_pages(
             page_list,
             title=title,

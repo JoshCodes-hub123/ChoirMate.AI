@@ -4,10 +4,25 @@
 import base64
 import io
 import wave
-from typing import List, Optional
+from typing import List, Optional, Any
 
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
+try:
+    from fastapi import APIRouter
+    from pydantic import BaseModel, Field
+except ImportError:
+    class APIRouter:  # type: ignore
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+        def post(self, *args: Any, **kwargs: Any):
+            return lambda f: f
+
+    class BaseModel:  # type: ignore
+        def __init__(self, **kwargs: Any) -> None:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def Field(default: Any = None, **kwargs: Any) -> Any:  # type: ignore
+        return default
 
 try:
     from .voice_studio import extract_voices
@@ -21,11 +36,11 @@ router = APIRouter(prefix="/voice-studio", tags=["Voice Studio"])
 
 
 class VoiceExtractionRequest(BaseModel):
-    musicxml: str = Field(min_length=1)
+    musicxml: str = Field(default="", min_length=1)
 
 
 class VoiceAudioRequest(BaseModel):
-    musicxml: str = Field(min_length=1)
+    musicxml: str = Field(default="", min_length=1)
     selectedVoiceIds: Optional[List[str]] = None
     tempo: int = Field(default=88, ge=36, le=220)
 

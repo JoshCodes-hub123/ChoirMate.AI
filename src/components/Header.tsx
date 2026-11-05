@@ -1,206 +1,262 @@
-
 import React, { useState } from 'react';
-import { X, Check, User, Presentation, AudioLines } from 'lucide-react';
+import {
+  AudioLines,
+  BookOpen,
+  FileUp,
+  Home,
+  Menu,
+  Mic,
+  Presentation,
+  Sparkles,
+  X,
+} from 'lucide-react';
+import { ScoreAnalysis, ScoreProvenance } from '../types/music';
 
-type Screen = 'home' | 'workspace' | 'results' | 'practice' | 'voice-studio';
+export type Screen = 'home' | 'workspace' | 'results' | 'voice-studio' | 'practice';
 
 interface HeaderProps {
-  currentScreen?: Screen;
-  onNavigate?: (screen: Screen) => void;
-  hasScore?: boolean;
+  currentScreen: Screen;
+  onNavigate: (screen: Screen) => void;
+  currentScore: ScoreAnalysis | null;
+  scoreProvenance: ScoreProvenance | null;
+  onStartNewUpload: () => void;
   onOpenPitchDeck?: () => void;
 }
+
+const NAV_ITEMS: Array<{
+  id: Screen;
+  label: string;
+  shortLabel: string;
+  icon: React.ComponentType<{ className?: string }>;
+  requiresScore?: boolean;
+}> = [
+  { id: 'home', label: 'Home', shortLabel: 'Home', icon: Home },
+  { id: 'workspace', label: 'Upload & Analyze', shortLabel: 'Upload', icon: FileUp },
+  {
+    id: 'results',
+    label: 'Score Breakdown',
+    shortLabel: 'Breakdown',
+    icon: BookOpen,
+    requiresScore: true,
+  },
+  {
+    id: 'voice-studio',
+    label: 'SATB Voice Studio',
+    shortLabel: 'SATB Studio',
+    icon: AudioLines,
+    requiresScore: true,
+  },
+  {
+    id: 'practice',
+    label: 'Practice Coach',
+    shortLabel: 'Practice',
+    icon: Mic,
+    requiresScore: true,
+  },
+];
 
 export const Header: React.FC<HeaderProps> = ({
   currentScreen,
   onNavigate,
-  hasScore = false,
+  currentScore,
+  scoreProvenance,
+  onStartNewUpload,
   onOpenPitchDeck,
 }) => {
-  const [showSignInModal, setShowSignInModal] = useState(false);
-  const [userRole, setUserRole] = useState<'guest' | 'chorister' | 'director'>('chorister');
-  const [signedIn, setSignedIn] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const isVoiceStudio = currentScreen === 'voice-studio';
+  const handleNavClick = (screen: Screen) => {
+    setMobileMenuOpen(false);
+    onNavigate(screen);
+  };
+
+  const isDemo = Boolean(currentScore?.isDemonstration || scoreProvenance === 'demo');
 
   return (
-    <>
-      <header className="sticky top-0 z-30 bg-[#FAF5ED]/95 backdrop-blur-md border-b border-[#E8E0D0]/80 transition-colors">
-        <div className="max-w-7xl mx-auto px-4 sm:px-10 lg:px-14 min-h-[72px] flex items-center justify-between gap-3">
-          {/* ChoirMate logo */}
+    <header className="sticky top-0 z-40 bg-[#FAF5ED]/95 backdrop-blur-md border-b border-[#E5DEC9]">
+      <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 h-16 sm:h-[72px] flex items-center justify-between gap-4">
+        {/* Zone 1: Brand & Active Score Provenance */}
+        <div className="flex items-center gap-3 min-w-0 shrink-0">
           <button
             type="button"
-            onClick={() => onNavigate?.('home')}
-            className="flex items-center text-left group cursor-pointer focus:outline-none min-h-[44px] shrink-0 transition-transform hover:opacity-90 active:scale-[0.98]"
-            aria-label="ChoirMate Home"
+            onClick={() => handleNavClick('home')}
+            className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none"
+            aria-label="ChoirMate AI Home"
           >
             <img
               src="/assets/choirmate_logo_mark.png"
-              alt="ChoirMate AI Logo"
-              className="h-10 sm:h-11 w-auto object-contain block"
-              loading="eager"
-              decoding="async"
-              width={34}
-              height={44}
+              alt="ChoirMate AI"
+              className="h-9 sm:h-10 w-auto object-contain shrink-0"
+              width={32}
+              height={40}
             />
+            <div className="hidden sm:block">
+              <span className="font-serif text-lg font-bold tracking-tight text-[#143826] block leading-none">
+                ChoirMate AI
+              </span>
+              <span className="text-[10px] font-medium tracking-widest uppercase text-[#637269] block mt-0.5">
+                Choral Score & SATB Studio
+              </span>
+            </div>
           </button>
 
-          {/* Navigation and actions */}
-          <div className="flex items-center justify-end gap-2 sm:gap-3 min-w-0">
-            {hasScore && (
+          {currentScore && (
+            <div
+              className={`hidden xl:flex items-center gap-2 pl-3 ml-1 border-l border-[#DED6C3] text-xs max-w-[230px] ${
+                isDemo ? 'text-[#8B6914]' : 'text-[#143826]'
+              }`}
+              title={`${isDemo ? 'Demo Score' : 'Uploaded Score'}: ${currentScore.title}`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  isDemo ? 'bg-[#C4962C]' : 'bg-[#1D7A4C]'
+                }`}
+              />
+              <div className="truncate">
+                <span className="font-semibold uppercase tracking-wider text-[10px] block leading-none opacity-75">
+                  {isDemo ? 'Demo Mode' : 'Active Upload'}
+                </span>
+                <span className="font-medium truncate block mt-0.5 text-[#16221A]">
+                  {currentScore.title}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Zone 2: Desktop Primary Navigation */}
+        <nav
+          className="hidden md:flex items-center gap-1 bg-[#F2ECE1] p-1 rounded-xl border border-[#E4DCCB]"
+          aria-label="Primary Navigation"
+        >
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = currentScreen === item.id;
+            const isMuted = item.requiresScore && !currentScore;
+
+            return (
               <button
+                key={item.id}
                 type="button"
-                onClick={() => onNavigate?.('voice-studio')}
-                aria-current={isVoiceStudio ? 'page' : undefined}
-                className={`min-h-[42px] px-3 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-[0.98] ${
-                  isVoiceStudio
-                    ? 'bg-[#143826] text-white shadow-sm'
-                    : 'border border-[#143826]/25 bg-white/60 text-[#143826] hover:bg-[#E7EDE7]'
+                onClick={() => handleNavClick(item.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`px-3 lg:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  isActive
+                    ? 'bg-[#143826] text-white shadow-xs'
+                    : isMuted
+                    ? 'text-[#6B7970] hover:text-[#143826] hover:bg-white/60'
+                    : 'text-[#16221A] hover:text-[#143826] hover:bg-white/80'
                 }`}
               >
-                <AudioLines className="w-4 h-4 shrink-0" />
-                <span className="hidden sm:inline">Voice Studio</span>
-                <span className="sm:hidden">Studio</span>
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden lg:inline">{item.label}</span>
+                <span className="lg:hidden">{item.shortLabel}</span>
               </button>
-            )}
+            );
+          })}
+        </nav>
 
+        {/* Zone 3: Actions */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setMobileMenuOpen(false);
+              onStartNewUpload();
+            }}
+            className="px-3.5 sm:px-4 py-2 rounded-xl bg-[#143826] hover:bg-[#1B4B33] text-white text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+          >
+            <FileUp className="w-3.5 h-3.5 shrink-0" />
+            <span>Upload Score</span>
+          </button>
+
+          {onOpenPitchDeck && (
             <button
               type="button"
-              onClick={() => onOpenPitchDeck?.()}
-              className="min-h-[42px] px-3 sm:px-4 py-2 rounded-full bg-[#9E7B35] text-white hover:bg-[#85672B] text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center gap-2 shadow-xs active:scale-[0.98]"
+              onClick={onOpenPitchDeck}
+              className="hidden sm:flex px-3 py-2 rounded-xl border border-[#D4C7B0] bg-white/80 hover:bg-white text-[#143826] text-xs font-semibold transition-all items-center gap-1.5 cursor-pointer"
+              title="Open OPEN//BUILD Pitch Deck"
             >
-              <Presentation className="w-4 h-4 shrink-0" />
-              <span className="hidden lg:inline">OPEN//BUILD Pitch Deck</span>
-              <span className="hidden sm:inline lg:hidden">Pitch Deck</span>
-              <span className="sr-only sm:hidden">Pitch Deck</span>
+              <Presentation className="w-3.5 h-3.5 text-[#9E7B35] shrink-0" />
+              <span className="hidden lg:inline">Pitch Deck</span>
             </button>
+          )}
 
-            <button
-              type="button"
-              onClick={() => setShowSignInModal(true)}
-              className="min-h-[42px] px-3 sm:px-5 py-2 rounded-full border border-[#143826] text-[#143826] hover:bg-[#143826]/5 text-xs sm:text-sm font-medium transition-all cursor-pointer flex items-center gap-2 active:scale-[0.98]"
-            >
-              {signedIn ? (
-                <>
-                  <User className="w-4 h-4 shrink-0" />
-                  <span className="hidden sm:inline capitalize">{userRole}</span>
-                </>
-              ) : (
-                <span>Sign in</span>
-              )}
-            </button>
-          </div>
+          {/* Mobile Menu Toggle */}
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            className="md:hidden p-2 rounded-xl border border-[#DFD6C5] text-[#143826] hover:bg-[#EFE8DC] cursor-pointer"
+            aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          >
+            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
         </div>
-      </header>
+      </div>
 
-      {/* Sign-in Modal */}
-      {showSignInModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="choirmate-signin-title"
-        >
-          <div className="bg-[#FAF5ED] border border-[#E4DCCF] rounded-3xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl relative text-[#16221A] animate-in fade-in zoom-in-95 duration-150">
-            <button
-              type="button"
-              onClick={() => setShowSignInModal(false)}
-              className="absolute top-5 right-5 text-[#738279] hover:text-[#16221A] p-1.5 rounded-full hover:bg-black/5 transition-colors cursor-pointer"
-              aria-label="Close"
+      {/* Mobile Navigation Drawer */}
+      {mobileMenuOpen && (
+        <div className="md:hidden border-t border-[#E5DEC9] bg-[#FAF5ED] px-4 pt-3 pb-5 space-y-2 shadow-lg">
+          {currentScore && (
+            <div
+              className={`px-3 py-2 rounded-xl border text-xs flex items-center justify-between ${
+                isDemo
+                  ? 'bg-[#FDF6E4] border-[#E8CF8C] text-[#7D5B0F]'
+                  : 'bg-[#E9F3EC] border-[#B8D8C4] text-[#143826]'
+              }`}
             >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="mb-5 pr-7">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#9E7B35]">
-                OPEN//BUILD 2026 • Chorister Pass
-              </span>
-
-              <h3
-                id="choirmate-signin-title"
-                className="font-serif text-2xl font-bold text-[#143826] mt-1"
-              >
-                Welcome to ChoirMate AI
-              </h3>
-
-              <p className="text-xs text-[#506056] mt-2 leading-relaxed">
-                Save rehearsal recordings, track vocal pitch progress, and synchronize scores across your choir section.
-              </p>
+              <div className="truncate pr-2">
+                <span className="font-bold uppercase tracking-wider text-[10px] block">
+                  {isDemo ? 'Demo Score Active' : 'Uploaded Score Active'}
+                </span>
+                <span className="font-semibold truncate block">{currentScore.title}</span>
+              </div>
+              <Sparkles className="w-4 h-4 shrink-0" />
             </div>
+          )}
 
-            <div className="space-y-3 mb-6">
-              {[
-                {
-                  id: 'chorister',
-                  label: 'Chorister (Soprano / Alto / Tenor / Bass)',
-                  desc: 'Practise vocal parts with solfa and pitch feedback',
-                },
-                {
-                  id: 'director',
-                  label: 'Choir Director / Conductor',
-                  desc: 'Distribute rehearsal MP3s, correct notes, and export scores',
-                },
-                {
-                  id: 'guest',
-                  label: 'Guest Sight-Singer',
-                  desc: 'Immediate instant access with no account required',
-                },
-              ].map((role) => (
+          <div className="grid grid-cols-1 gap-1">
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = currentScreen === item.id;
+              return (
                 <button
-                  key={role.id}
+                  key={item.id}
                   type="button"
-                  onClick={() =>
-                    setUserRole(role.id as 'guest' | 'chorister' | 'director')
-                  }
-                  aria-pressed={userRole === role.id}
-                  className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-3 ${
-                    userRole === role.id
-                      ? 'border-[#143826] bg-[#143826]/5 shadow-xs'
-                      : 'border-[#E4DCCF] bg-white hover:border-[#143826]/40'
+                  onClick={() => handleNavClick(item.id)}
+                  className={`w-full px-3.5 py-2.5 rounded-xl text-left text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
+                    isActive
+                      ? 'bg-[#143826] text-white'
+                      : 'text-[#16221A] hover:bg-[#EFE8DC]'
                   }`}
                 >
-                  <div>
-                    <p className="text-xs font-semibold text-[#143826]">
-                      {role.label}
-                    </p>
-                    <p className="text-[11px] text-[#637269] mt-0.5">
-                      {role.desc}
-                    </p>
-                  </div>
-
-                  {userRole === role.id && (
-                    <div className="w-5 h-5 rounded-full bg-[#143826] text-white flex items-center justify-center shrink-0 mt-0.5">
-                      <Check className="w-3 h-3" />
-                    </div>
+                  <span className="flex items-center gap-2.5">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span>{item.label}</span>
+                  </span>
+                  {item.requiresScore && !currentScore && (
+                    <span className="text-[10px] opacity-70 font-normal">Requires score</span>
                   )}
                 </button>
-              ))}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setSignedIn(true);
-                  setShowSignInModal(false);
-                }}
-                className="flex-1 py-3 px-4 rounded-full bg-[#143826] hover:bg-[#1B4A34] text-white font-medium text-xs transition-colors cursor-pointer"
-              >
-                Continue as{' '}
-                {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowSignInModal(false)}
-                className="py-3 px-4 rounded-full border border-[#D5CBBB] text-[#506056] hover:bg-black/5 text-xs transition-colors cursor-pointer"
-              >
-                Dismiss
-              </button>
-            </div>
+              );
+            })}
           </div>
+
+          {onOpenPitchDeck && (
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onOpenPitchDeck();
+              }}
+              className="w-full mt-2 px-3.5 py-2.5 rounded-xl border border-[#D4C7B0] bg-white text-[#143826] text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Presentation className="w-4 h-4 text-[#9E7B35]" />
+              <span>View OPEN//BUILD Pitch Deck</span>
+            </button>
+          )}
         </div>
       )}
-    </>
+    </header>
   );
 };

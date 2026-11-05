@@ -48,6 +48,8 @@ python/models/
 # Environment variables & secrets (NEVER commit secrets!)
 .env
 .env.local
+.env.windows.local
+.env.*.local
 .env.development.local
 .env.test.local
 .env.production.local

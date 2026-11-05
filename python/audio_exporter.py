@@ -8,12 +8,20 @@ Never renames a WAV file to .mp3: uses /usr/bin/ffmpeg (libmp3lame) to encode re
 import io
 import os
 import re
+import math
 import wave
+import array
 import base64
 import shutil
 import subprocess
-from typing import Dict, Any, List, Optional, Tuple
-import numpy as np
+from typing import Dict, Any, List, Optional, Tuple, Union
+
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore
+    HAS_NUMPY = False
 
 SAMPLE_RATE = 44100
 
@@ -57,12 +65,105 @@ def _duration_beats(note: Dict[str, Any]) -> float:
     return mapping.get(audio_type, 1.0)
 
 
+def _synthesize_single_tone_stdlib(
+    freq: float,
+    dur_sec: float,
+    voice: str = "choir",
+    sample_rate: int = SAMPLE_RATE,
+) -> List[float]:
+    num_samples = max(1, int(round(dur_sec * sample_rate)))
+    if freq <= 0.0:
+        return [0.0] * num_samples
+
+    out = [0.0] * num_samples
+    two_pi = 2.0 * math.pi
+
+    if voice == "piano":
+        attack = min(0.012, dur_sec * 0.1)
+        decay_denom = max(0.35, dur_sec)
+        release_samples = max(1, int(min(0.04, dur_sec * 0.15) * sample_rate))
+        rel_start = num_samples - release_samples
+        for i in range(num_samples):
+            t = i / float(sample_rate)
+            attack_env = min(1.0, t / max(1e-4, attack))
+            decay_env = math.exp(-2.8 * t / decay_denom)
+            release_env = (num_samples - 1 - i) / float(max(1, release_samples - 1)) if i >= rel_start else 1.0
+            sig = (
+                1.00 * math.sin(two_pi * freq * t)
+                + 0.42 * math.sin(two_pi * (freq * 2.0) * t) * math.exp(-1.5 * t)
+                + 0.18 * math.sin(two_pi * (freq * 3.0) * t) * math.exp(-2.5 * t)
+                + 0.08 * math.sin(two_pi * (freq * 4.0) * t) * math.exp(-3.8 * t)
+            )
+            out[i] = sig * attack_env * decay_env * release_env * 0.36
+        return out
+
+    if voice == "strings":
+        attack_sec = min(0.085, dur_sec * 0.25)
+        release_sec = min(0.09, dur_sec * 0.25)
+        att_n = max(1, int(attack_sec * sample_rate))
+        rel_n = max(1, int(release_sec * sample_rate))
+        rel_start = num_samples - rel_n
+        phase = 0.0
+        phase_inc_base = two_pi * freq / float(sample_rate)
+        for i in range(num_samples):
+            t = i / float(sample_rate)
+            env = (i / float(att_n)) if i < att_n else (((num_samples - 1 - i) / float(max(1, rel_n - 1))) if i >= rel_start else 1.0)
+            vibrato = 1.0 + 0.003 * math.sin(two_pi * 5.4 * t)
+            phase += phase_inc_base * vibrato
+            sig = (
+                0.90 * math.sin(phase)
+                + 0.45 * math.sin(2.0 * phase + 0.2)
+                + 0.25 * math.sin(3.0 * phase + 0.5)
+                + 0.12 * math.sin(4.0 * phase)
+            )
+            out[i] = sig * env * 0.30
+        return out
+
+    # Default 'choir' formant-shaped harmonic synthesis
+    attack_sec = min(0.055, dur_sec * 0.22)
+    release_sec = min(0.065, dur_sec * 0.22)
+    att_n = max(1, int(attack_sec * sample_rate))
+    rel_n = max(1, int(release_sec * sample_rate))
+    rel_start = num_samples - rel_n
+    weights = [1.0, 0.58, 0.32, 0.16, 0.08, 0.04]
+    active_harmonics: List[Tuple[int, float]] = []
+    for h_idx, w in enumerate(weights, start=1):
+        h_freq = freq * h_idx
+        if h_freq >= sample_rate * 0.45:
+            break
+        formant_boost = 1.0 + 0.45 * math.exp(-((h_freq - 720.0) / 380.0) ** 2)
+        active_harmonics.append((h_idx, w * formant_boost))
+
+    phase = 0.0
+    phase_inc_base = two_pi * freq / float(sample_rate)
+    half_pi = math.pi / 2.0
+    for i in range(num_samples):
+        t = i / float(sample_rate)
+        if i < att_n:
+            env = math.sin(half_pi * (i / float(att_n)))
+        elif i >= rel_start:
+            env = math.cos(half_pi * ((i - rel_start) / float(max(1, rel_n - 1))))
+        else:
+            env = 1.0
+        vib_mask = max(0.0, min(1.0, (t - 0.12) / 0.15))
+        vibrato = 1.0 + 0.0028 * vib_mask * math.sin(two_pi * 5.1 * t)
+        phase += phase_inc_base * vibrato
+        h_sum = 0.0
+        for h_idx, hw in active_harmonics:
+            h_sum += hw * math.sin(h_idx * phase)
+        out[i] = h_sum * env * 0.26
+    return out
+
+
 def _synthesize_single_tone(
     freq: float,
     dur_sec: float,
     voice: str = "choir",
     sample_rate: int = SAMPLE_RATE,
-) -> np.ndarray:
+):
+    if not HAS_NUMPY:
+        return _synthesize_single_tone_stdlib(freq, dur_sec, voice=voice, sample_rate=sample_rate)
+
     num_samples = max(1, int(round(dur_sec * sample_rate)))
     t = np.linspace(0.0, dur_sec, num_samples, endpoint=False, dtype=np.float64)
 
@@ -181,6 +282,77 @@ def synthesize_practice_wav_bytes(
             curr["_merged_beats"] = beats
             merged_events.append(curr)
             idx += 1
+
+    if not HAS_NUMPY:
+        full_samples: List[float] = []
+        total_beats_accum = 0.0
+        two_pi = 2.0 * math.pi
+        for ev in merged_events:
+            beats = float(ev.get("_merged_beats", _duration_beats(ev)))
+            dur_sec = max(0.06, beats * sec_per_beat)
+            num_samples = max(1, int(round(dur_sec * SAMPLE_RATE)))
+            is_rest = bool(ev.get("isRest") or ev.get("pitch") == "REST" or float(ev.get("frequency") or 0) <= 0)
+            seg_list = [0.0] * num_samples
+
+            if not is_rest:
+                primary_freq = float(ev.get("frequency") or 0.0)
+                chord_freqs = [
+                    float(f)
+                    for f in (ev.get("chordFrequencies") or [])
+                    if isinstance(f, (int, float)) and float(f) > 0
+                ]
+                if primary_freq > 0 and all(abs(primary_freq - cf) > 0.5 for cf in chord_freqs):
+                    all_freqs = [primary_freq] + chord_freqs
+                elif chord_freqs:
+                    all_freqs = chord_freqs
+                else:
+                    all_freqs = [primary_freq]
+
+                sound_dur = max(0.04, dur_sec - 0.018)
+                sound_samples = max(1, int(round(sound_dur * SAMPLE_RATE)))
+                scale = 1.0 / max(1.0, math.sqrt(len(all_freqs)))
+                for f in all_freqs:
+                    tone = _synthesize_single_tone_stdlib(f, sound_dur, voice=voice, sample_rate=SAMPLE_RATE)
+                    take = min(sound_samples, len(tone))
+                    for i in range(take):
+                        seg_list[i] += tone[i] * scale
+
+            if metronome:
+                beat_Count = max(1, int(round(beats)))
+                for b in range(beat_Count):
+                    click_offset = int(round(b * sec_per_beat * SAMPLE_RATE))
+                    if click_offset < num_samples:
+                        click_dur = 0.025
+                        click_len = min(int(click_dur * SAMPLE_RATE), num_samples - click_offset)
+                        is_downbeat = (int(round(total_beats_accum + b)) % 4 == 0)
+                        click_freq = 1150.0 if is_downbeat else 820.0
+                        for i in range(click_len):
+                            ct = i / float(SAMPLE_RATE)
+                            seg_list[click_offset + i] += 0.22 * math.sin(two_pi * click_freq * ct) * math.exp(-90.0 * ct)
+
+            full_samples.extend(seg_list)
+            total_beats_accum += beats
+
+        full_samples.extend([0.0] * int(0.25 * SAMPLE_RATE))
+        peak = max((abs(x) for x in full_samples), default=0.0)
+        gain_mult = 1.0
+        if peak > 0.92:
+            gain_mult = 0.90 / peak
+        elif 0.0 < peak < 0.25:
+            gain_mult = 0.70 / peak
+
+        pcm_arr = array.array(
+            "h",
+            (max(-32768, min(32767, int(round(x * gain_mult * 32767.0)))) for x in full_samples)
+        )
+        duration_seconds = round(float(len(pcm_arr)) / float(SAMPLE_RATE), 2)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(pcm_arr.tobytes())
+        return buf.getvalue(), duration_seconds
 
     segments: List[np.ndarray] = []
     total_beats_accum = 0.0

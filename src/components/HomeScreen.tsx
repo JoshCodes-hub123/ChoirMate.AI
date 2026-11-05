@@ -3,44 +3,50 @@ import {
   Upload,
   ArrowRight,
   Play,
-  Download,
-  FileText,
-  Volume2,
+  AudioLines,
+  BookOpen,
+  Mic,
   CheckCircle2,
   Sparkles,
+  FileCode2,
+  FileText,
+  Image as ImageIcon,
+  Volume2,
 } from 'lucide-react';
 import { ScoreAnalysis } from '../types/music';
 import { SAMPLE_SCORES } from '../data/sampleScores';
 
 interface HomeScreenProps {
   onLearnNewScore: () => void;
-  onSelectSample: (score: ScoreAnalysis) => void;
+  onSelectSample: (score: ScoreAnalysis, targetScreen?: 'results' | 'voice-studio' | 'practice') => void;
 }
+
+const PREVIEW_NOTES = [
+  { pitch: 'C4', solfa: 'Do', beat: 'Beat 1', duration: 'Quarter (1 beat)', freq: 261.63, tip: 'Grounded tonic center — breathe low and open your throat.' },
+  { pitch: 'E4', solfa: 'Mi', beat: 'Beat 2', duration: 'Quarter (1 beat)', freq: 329.63, tip: 'Major third — keep vowel bright so the chord doesn’t sag.' },
+  { pitch: 'G4', solfa: 'Sol', beat: 'Beat 3', duration: 'Quarter (1 beat)', freq: 392.0, tip: 'Dominant fifth — resonant ring in the mask.' },
+  { pitch: 'C5', solfa: 'Do’', beat: 'Beat 4', duration: 'Half (2 beats)', freq: 523.25, tip: 'Octave tonic — lift soft palate and spin the air.' },
+];
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   onLearnNewScore,
   onSelectSample,
 }) => {
-  // Interactive Hero Melody State
-  const [isPlayingMelody, setIsPlayingMelody] = useState(false);
-  const [activeNoteIndex, setActiveNoteIndex] = useState(1); // Default to note 1 (Mi) to match reference image
+  const [activeNoteIdx, setActiveNoteIdx] = useState(0);
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const playTimeoutRefs = useRef<number[]>([]);
+  const timersRef = useRef<number[]>([]);
 
-  // Cleanup audio timers on unmount
   useEffect(() => {
     return () => {
-      playTimeoutRefs.current.forEach((id) => window.clearTimeout(id));
+      timersRef.current.forEach((id) => window.clearTimeout(id));
       if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
         audioCtxRef.current.close().catch(() => {});
       }
     };
   }, []);
 
-  const playHeroMelody = () => {
-    if (isPlayingMelody) return;
-    setIsPlayingMelody(true);
-
+  const playNoteTone = (freq: number, durationSec = 0.48) => {
     try {
       const AudioContextClass =
         window.AudioContext ||
@@ -52,500 +58,445 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       if (ctx.state === 'suspended') {
         ctx.resume();
       }
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
 
-      // Melody notes: Do (C4), Mi (E4), Sol (G4), Do (C5)
-      const melody = [
-        { freq: 261.63, name: 'Do', noteIndex: 0 },
-        { freq: 329.63, name: 'Mi', noteIndex: 1 },
-        { freq: 392.00, name: 'Sol', noteIndex: 2 },
-        { freq: 523.25, name: "Do'", noteIndex: 3 },
-      ];
+      osc1.type = 'triangle';
+      osc1.frequency.setValueAtTime(freq, now);
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(freq * 2, now);
 
-      playTimeoutRefs.current.forEach((id) => window.clearTimeout(id));
-      playTimeoutRefs.current = [];
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.18, now + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec);
 
-      melody.forEach((item, index) => {
-        const timerId = window.setTimeout(() => {
-          setActiveNoteIndex(item.noteIndex);
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
 
-          // Synthesize warm choral sine-triangle tone
-          const now = ctx.currentTime;
-          const osc1 = ctx.createOscillator();
-          const osc2 = ctx.createOscillator();
-          const gain = ctx.createGain();
-          const filter = ctx.createBiquadFilter();
-
-          filter.type = 'lowpass';
-          filter.frequency.setValueAtTime(1600, now);
-
-          osc1.type = 'triangle';
-          osc1.frequency.setValueAtTime(item.freq, now);
-          osc2.type = 'sine';
-          osc2.frequency.setValueAtTime(item.freq * 2, now); // soft octave overtone
-
-          gain.gain.setValueAtTime(0.001, now);
-          gain.gain.linearRampToValueAtTime(0.2, now + 0.04);
-          gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
-
-          osc1.connect(filter);
-          osc2.connect(filter);
-          filter.connect(gain);
-          gain.connect(ctx.destination);
-
-          osc1.start(now);
-          osc2.start(now);
-          osc1.stop(now + 0.5);
-          osc2.stop(now + 0.5);
-
-          // If last note, reset back to reference note state (Mi) after settling
-          if (index === melody.length - 1) {
-            const endTimer = window.setTimeout(() => {
-              setActiveNoteIndex(1);
-              setIsPlayingMelody(false);
-            }, 600);
-            playTimeoutRefs.current.push(endTimer);
-          }
-        }, index * 450);
-
-        playTimeoutRefs.current.push(timerId);
-      });
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + durationSec + 0.03);
+      osc2.stop(now + durationSec + 0.03);
     } catch {
-      setIsPlayingMelody(false);
-      setActiveNoteIndex(1);
+      // Ignore Web Audio gesture restriction
     }
   };
 
+  const handlePlayPhrase = () => {
+    if (isPlayingPreview) return;
+    setIsPlayingPreview(true);
+    timersRef.current.forEach((id) => window.clearTimeout(id));
+    timersRef.current = [];
+
+    PREVIEW_NOTES.forEach((note, idx) => {
+      const tid = window.setTimeout(() => {
+        setActiveNoteIdx(idx);
+        playNoteTone(note.freq, idx === 3 ? 0.65 : 0.45);
+      }, idx * 520);
+      timersRef.current.push(tid);
+    });
+
+    const endTid = window.setTimeout(() => {
+      setIsPlayingPreview(false);
+    }, PREVIEW_NOTES.length * 520 + 200);
+    timersRef.current.push(endTid);
+  };
+
+  const primaryDemoScore = SAMPLE_SCORES[0];
+
   return (
-    <div className="space-y-20 pb-16">
-      {/* ────────────────────────────────────────────────────────────
-          1. EXACT HERO SECTION RECREATION (Matching Reference Image)
-         ──────────────────────────────────────────────────────────── */}
-      <section className="relative pt-2 sm:pt-6 lg:pt-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
-          {/* Left Column: Typography, Eyebrow & Actions */}
-          <div className="lg:col-span-6 space-y-7 sm:space-y-8 pr-0 lg:pr-2">
-            {/* Eyebrow: Warm ochre dash + tracked uppercase */}
-            <div className="flex items-center gap-3">
-              <span className="w-8 h-[2px] bg-[#9E7B35] rounded-full inline-block" />
-              <span className="text-[11px] sm:text-xs font-semibold tracking-[0.24em] text-[#9E7B35] uppercase">
-                MEET YOUR NEW MUSIC COMPANION
-              </span>
+    <div className="w-full text-[#16221A] pb-20">
+      {/* HERO SECTION */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 pt-8 sm:pt-14 pb-16">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
+          {/* Left Column: Editorial Value Proposition */}
+          <div className="lg:col-span-7 space-y-6">
+            <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[#9E7B35] border-b border-[#D8CBB3] pb-1.5">
+              <span>AI Choral Score Analysis & SATB Rehearsal Studio</span>
             </div>
 
-            {/* Main Headline: Bookish Serif Display */}
-            <h1 className="font-serif text-[2.75rem] sm:text-[3.65rem] lg:text-[4.15rem] font-medium leading-[1.08] tracking-tight text-[#16221A] text-balance">
-              Sing a song you’ve <br className="hidden sm:inline" />
-              never sung before. <br className="hidden sm:inline" />
-              Understand every note.
+            <h1 className="font-serif text-4xl sm:text-5xl lg:text-[3.5rem] font-bold text-[#143826] leading-[1.08] tracking-tight">
+              Turn any sheet of music into something you can practice.
             </h1>
 
-            {/* Subtitle Description */}
-            <p className="text-base sm:text-lg text-[#4A5850] leading-relaxed max-w-xl font-normal text-pretty">
-              Discover the melody, learn the solfa, understand the rhythm, and explore
-              your song with your personal AI music companion. No more feeling lost when
-              you open unfamiliar sheet music.
+            <p className="text-base sm:text-lg text-[#45544B] max-w-2xl leading-relaxed">
+              Upload your score, understand the notes, isolate your vocal part, and rehearse with confidence.
             </p>
 
-            {/* Sight-reading Helper Link */}
-            <div className="pt-0.5">
-              <button
-                type="button"
-                onClick={() => onSelectSample(SAMPLE_SCORES[0])}
-                className="inline-flex items-center gap-2 text-sm text-[#66766D] hover:text-[#153928] transition-colors group cursor-pointer text-left"
-              >
-                <span className="text-base leading-none" role="img" aria-label="Graduation cap">
-                  🎓
-                </span>
-                <span>
-                  New to sight-reading or sight-singing?{' '}
-                  <span className="underline underline-offset-4 font-medium text-[#153928] group-hover:text-[#1F543B]">
-                    Start here.
-                  </span>
-                </span>
-              </button>
-            </div>
-
-            {/* Buttons Row: Dark pine green pill + Secondary text link */}
-            <div className="pt-2 flex flex-wrap items-center gap-6 sm:gap-7">
+            {/* Primary & Secondary CTAs */}
+            <div className="flex flex-wrap items-center gap-3.5 pt-2">
               <button
                 type="button"
                 onClick={onLearnNewScore}
-                className="min-h-[50px] px-8 py-3.5 rounded-full bg-[#153928] hover:bg-[#1C4B35] active:scale-[0.99] text-white font-medium text-base flex items-center justify-center gap-3 shadow-xs hover:shadow-md transition-all cursor-pointer group"
+                className="px-6 py-3.5 rounded-xl bg-[#143826] hover:bg-[#1B4B33] text-white font-semibold text-sm sm:text-base transition-all flex items-center gap-2.5 shadow-md cursor-pointer active:scale-[0.99]"
               >
-                <span>Explore your first song</span>
-                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                <Upload className="w-4 h-4 shrink-0" />
+                <span>Upload Sheet Music</span>
+                <ArrowRight className="w-4 h-4 shrink-0" />
               </button>
 
-              <a
-                href="#how-it-works"
-                onClick={(e) => {
-                  e.preventDefault();
-                  document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' });
-                }}
-                className="inline-flex items-center gap-2 text-base font-medium text-[#153928] hover:text-[#1C4B35] transition-colors cursor-pointer group py-2"
-              >
-                <span>See how it works</span>
-                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </a>
+              {primaryDemoScore && (
+                <button
+                  type="button"
+                  onClick={() => onSelectSample(primaryDemoScore, 'results')}
+                  className="px-6 py-3.5 rounded-xl border-2 border-[#143826]/30 bg-white/80 hover:bg-white hover:border-[#143826] text-[#143826] font-semibold text-sm sm:text-base transition-all flex items-center gap-2 cursor-pointer active:scale-[0.99]"
+                >
+                  <Sparkles className="w-4 h-4 text-[#9E7B35] shrink-0" />
+                  <span>Try a Demo</span>
+                </button>
+              )}
             </div>
-          </div>
 
-          {/* Right Column: Hero Photo & Interactive Floating Melody Card */}
-          <div className="lg:col-span-6 relative">
-            <div className="relative rounded-[2rem] sm:rounded-[2.5rem] overflow-hidden shadow-xl border border-black/5 bg-[#EAE3D2] transition-transform">
-              <picture>
-                <source srcSet="/assets/hero_choir_practice.webp" type="image/webp" />
-                <img
-                  src="/assets/hero_choir_practice.png"
-                  alt="Singing choir practice together with tablet sheet music"
-                  className="w-full h-auto object-cover block"
-                  width={803}
-                  height={731}
-                  loading="eager"
-                  fetchPriority="high"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                />
-              </picture>
-
-              {/* Interactive Live Melody Overlay Card on bottom-right matching reference design */}
-              <div
-                onClick={playHeroMelody}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    playHeroMelody();
-                  }
-                }}
-                title="Click to play melody preview"
-                className="absolute right-3 sm:right-6 bottom-3 sm:bottom-6 bg-white/95 backdrop-blur-md rounded-2xl p-3.5 sm:p-4 shadow-xl border border-black/5 max-w-[240px] sm:max-w-[280px] w-full select-none cursor-pointer group hover:bg-white hover:scale-[1.02] transition-all"
-              >
-                {/* Card Header: Title + Animated Soundwave Icon */}
-                <div className="flex items-center justify-between gap-2 mb-2 sm:mb-2.5">
-                  <span className="text-xs sm:text-sm font-semibold text-[#1F2C24] flex items-center gap-1.5">
-                    <span>New melody</span>
-                    <span className="text-[10px] text-[#86948C] font-normal hidden sm:inline">
-                      ({isPlayingMelody ? 'Playing...' : 'Click to hear'})
-                    </span>
-                  </span>
-
-                  {/* Golden Waveform Bars */}
-                  <div className="flex items-center gap-0.5" aria-hidden="true">
-                    {[10, 16, 22, 14, 8].map((h, i) => (
-                      <span
-                        key={i}
-                        style={{ height: `${h}px` }}
-                        className={`w-0.5 rounded-full bg-[#C89335] transition-all ${
-                          isPlayingMelody ? 'animate-pulse' : ''
-                        }`}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Stave Lines with Treble Clef, Notes, and Vertical Highlight */}
-                <div className="relative h-14 sm:h-16 w-full flex items-center justify-center my-1">
-                  {/* 5 Horizontal Staff Lines */}
-                  <div className="absolute inset-x-0 inset-y-2 flex flex-col justify-between pointer-events-none opacity-45">
-                    <div className="h-px bg-[#7A8C82] w-full" />
-                    <div className="h-px bg-[#7A8C82] w-full" />
-                    <div className="h-px bg-[#7A8C82] w-full" />
-                    <div className="h-px bg-[#7A8C82] w-full" />
-                    <div className="h-px bg-[#7A8C82] w-full" />
-                  </div>
-
-                  {/* Stave Graphic SVG */}
-                  <svg
-                    className="w-full h-full relative z-10"
-                    viewBox="0 0 200 50"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    {/* Treble Clef Graphic */}
-                    <text
-                      x="10"
-                      y="37"
-                      fontSize="38"
-                      fill="#1E2A22"
-                      fontFamily="serif"
-                      className="select-none"
-                    >
-                      𝄞
-                    </text>
-
-                    {/* Vertical Green Column Highlight Tracking Note */}
-                    <rect
-                      x={
-                        activeNoteIndex === 0
-                          ? 45
-                          : activeNoteIndex === 1
-                          ? 80
-                          : activeNoteIndex === 2
-                          ? 118
-                          : 154
-                      }
-                      y="4"
-                      width="20"
-                      height="42"
-                      rx="8"
-                      fill="#D7EBE0"
-                      fillOpacity="0.85"
-                      stroke="#A8D6BD"
-                      strokeWidth="1"
-                      className="transition-all duration-200"
-                    />
-
-                    {/* Note 1: Do (C4 with ledger line) */}
-                    <line x1="50" y1="41" x2="62" y2="41" stroke="#1E2A22" strokeWidth="1.2" />
-                    <ellipse cx="55" cy="41" rx="4.5" ry="3.2" fill="#1E2A22" transform="rotate(-15 55 41)" />
-                    <line x1="59" y1="41" x2="59" y2="15" stroke="#1E2A22" strokeWidth="1.2" />
-
-                    {/* Note 2: Mi (E4 on bottom line) */}
-                    <ellipse cx="90" cy="35" rx="4.5" ry="3.2" fill="#1E2A22" transform="rotate(-15 90 35)" />
-                    <line x1="94" y1="35" x2="94" y2="10" stroke="#1E2A22" strokeWidth="1.2" />
-
-                    {/* Note 3: Sol (G4 on 2nd line) */}
-                    <ellipse cx="128" cy="28" rx="4.5" ry="3.2" fill="#1E2A22" transform="rotate(-15 128 28)" />
-                    <line x1="132" y1="28" x2="132" y2="5" stroke="#1E2A22" strokeWidth="1.2" />
-
-                    {/* Note 4: High Do (C5 on 3rd space) */}
-                    <ellipse cx="164" cy="20" rx="4.5" ry="3.2" fill="#1E2A22" transform="rotate(-15 164 20)" />
-                    <line x1="160" y1="20" x2="160" y2="44" stroke="#1E2A22" strokeWidth="1.2" />
-                  </svg>
-                </div>
-
-                {/* Bottom Row: Solfa Syllables with Highlight Pill */}
-                <div className="flex items-center justify-center gap-3 text-xs text-[#526359] pt-1">
-                  <span
-                    className={
-                      activeNoteIndex === 0
-                        ? 'font-bold text-[#1E5238] bg-[#D7EBE0] px-2 py-0.5 rounded-full'
-                        : 'font-medium'
-                    }
-                  >
-                    Do
-                  </span>
-                  <span className="text-[#9BAAA1]" aria-hidden="true">·</span>
-                  <span
-                    className={
-                      activeNoteIndex === 1
-                        ? 'font-bold text-[#1E5238] bg-[#D7EBE0] px-2.5 py-0.5 rounded-full'
-                        : 'font-medium'
-                    }
-                  >
-                    Mi
-                  </span>
-                  <span className="text-[#9BAAA1]" aria-hidden="true">·</span>
-                  <span
-                    className={
-                      activeNoteIndex >= 2
-                        ? 'font-bold text-[#1E5238] bg-[#D7EBE0] px-2 py-0.5 rounded-full'
-                        : 'font-medium'
-                    }
-                  >
-                    Sol
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ────────────────────────────────────────────────────────────
-          2. HOW IT WORKS: 4-PILLAR REHEARSAL WORKFLOW
-         ──────────────────────────────────────────────────────────── */}
-      <section id="how-it-works" className="space-y-8 pt-4 scroll-mt-24">
-        <div className="text-center max-w-2xl mx-auto space-y-2">
-          <div className="flex items-center justify-center gap-2.5">
-            <span className="w-6 h-[2px] bg-[#9E7B35] rounded-full inline-block" />
-            <span className="text-xs font-semibold uppercase tracking-widest text-[#9E7B35]">
-              How ChoirMate Works
-            </span>
-            <span className="w-6 h-[2px] bg-[#9E7B35] rounded-full inline-block" />
-          </div>
-          <h2 className="font-serif text-3xl sm:text-4xl font-medium text-[#16221A]">
-            From printed score to confident sight-singing
-          </h2>
-          <p className="text-sm sm:text-base text-[#526359] leading-relaxed">
-            ChoirMate AI combines conservatory optical music recognition, movable-Do solfa,
-            customizable rehearsal audio downloads, and AI vocal coaching in one seamless flow.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* Step 1 */}
-          <div className="bg-white/80 backdrop-blur-xs border border-[#E6DDCE] rounded-3xl p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between">
-            <div>
-              <div className="w-12 h-12 rounded-2xl bg-[#E4ECE7] text-[#143826] flex items-center justify-center mb-5">
-                <FileText className="w-6 h-6" />
-              </div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#9E7B35]">
-                Step 01 • Full-Score OMR
-              </span>
-              <h3 className="font-serif text-xl font-medium text-[#16221A] mt-1.5">
-                Multi-Page PDF &amp; Image Upload
-              </h3>
-              <p className="text-xs text-[#526359] mt-2.5 leading-relaxed">
-                Upload entire multi-page PDF choir booklets, sheet music scans, or MusicXML files.
-                All staves, measures, and SATB vocal parts stay synchronized with your original document.
-              </p>
-            </div>
-            <div className="mt-5 pt-4 border-t border-[#EFE8DD] flex items-center gap-2 text-[11px] font-semibold text-[#143826]">
-              <CheckCircle2 className="w-3.5 h-3.5 text-[#143826]" />
-              <span>Full-score system detection</span>
-            </div>
-          </div>
-
-          {/* Step 2 */}
-          <div className="bg-white/80 backdrop-blur-xs border border-[#E6DDCE] rounded-3xl p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between">
-            <div>
-              <div className="w-12 h-12 rounded-2xl bg-[#F9F2DF] text-[#9E7B35] flex items-center justify-center mb-5">
-                <Volume2 className="w-6 h-6" />
-              </div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#9E7B35]">
-                Step 02 • Solfa &amp; Edit
-              </span>
-              <h3 className="font-serif text-xl font-medium text-[#16221A] mt-1.5">
-                Movable-Do Solfa &amp; Note Correction
-              </h3>
-              <p className="text-xs text-[#526359] mt-2.5 leading-relaxed">
-                Instantly see Do–Re–Mi syllables mapped to the detected key signature for Soprano,
-                Alto, Tenor, or Bass. Correct any pitch or duration with immediate solfa recalculation.
-              </p>
-            </div>
-            <div className="mt-5 pt-4 border-t border-[#EFE8DD] flex items-center gap-2 text-[11px] font-semibold text-[#143826]">
-              <CheckCircle2 className="w-3.5 h-3.5 text-[#143826]" />
-              <span>Key-aware Solfa calculation</span>
-            </div>
-          </div>
-
-          {/* Step 3 */}
-          <div className="bg-white/80 backdrop-blur-xs border border-[#E6DDCE] rounded-3xl p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between">
-            <div>
-              <div className="w-12 h-12 rounded-2xl bg-[#E4ECE7] text-[#143826] flex items-center justify-center mb-5">
-                <Download className="w-6 h-6" />
-              </div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#9E7B35]">
-                Step 03 • Audio Export
-              </span>
-              <h3 className="font-serif text-xl font-medium text-[#16221A] mt-1.5">
-                Download MP3 &amp; WAV Audio
-              </h3>
-              <p className="text-xs text-[#526359] mt-2.5 leading-relaxed">
-                Generate high-quality practice audio for the entire score or a selected measure
-                range. Download true MP3 or WAV files to take to your choir rehearsals.
-              </p>
-            </div>
-            <div className="mt-5 pt-4 border-t border-[#EFE8DD] flex items-center gap-2 text-[11px] font-semibold text-[#143826]">
-              <CheckCircle2 className="w-3.5 h-3.5 text-[#143826]" />
-              <span>Choir &amp; piano rehearsal tracks</span>
-            </div>
-          </div>
-
-          {/* Step 4 */}
-          <div className="bg-white/80 backdrop-blur-xs border border-[#E6DDCE] rounded-3xl p-6 shadow-xs hover:shadow-md transition-all flex flex-col justify-between">
-            <div>
-              <div className="w-12 h-12 rounded-2xl bg-[#F9F2DF] text-[#9E7B35] flex items-center justify-center mb-5">
-                <Sparkles className="w-6 h-6" />
-              </div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#9E7B35]">
-                Step 04 • Voice Coach
-              </span>
-              <h3 className="font-serif text-xl font-medium text-[#16221A] mt-1.5">
-                Pitch Accuracy &amp; SmolLM2 Coach
-              </h3>
-              <p className="text-xs text-[#526359] mt-2.5 leading-relaxed">
-                Sing along into your microphone with real-time pitch detection, and ask questions
-                about intervals, breath support, or Latin pronunciation answered by local SmolLM2.
-              </p>
-            </div>
-            <div className="mt-5 pt-4 border-t border-[#EFE8DD] flex items-center gap-2 text-[11px] font-semibold text-[#143826]">
-              <CheckCircle2 className="w-3.5 h-3.5 text-[#143826]" />
-              <span>Real-time pitch detector</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ────────────────────────────────────────────────────────────
-          3. FEATURES: INSTANT REPERTOIRE LIBRARY & DEMO
-         ──────────────────────────────────────────────────────────── */}
-      <section id="features" className="space-y-8 pt-4 scroll-mt-24">
-        <div className="bg-white/80 backdrop-blur-xs border border-[#E6DDCE] rounded-3xl p-6 sm:p-10 shadow-xs">
-          <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-4 mb-8">
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <span className="w-5 h-[2px] bg-[#9E7B35] rounded-full inline-block" />
-                <span className="text-xs font-semibold uppercase tracking-widest text-[#9E7B35]">
-                  Instant Repertoire Library
+            {/* Supported Formats & Guarantee */}
+            <div className="pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-[#E4DCCB] text-xs text-[#4F5F56]">
+              <div className="flex items-center gap-2">
+                <FileCode2 className="w-4 h-4 text-[#143826] shrink-0" />
+                <span>
+                  <strong className="text-[#16221A]">MusicXML (.xml)</strong> multi-part SATB
                 </span>
               </div>
-              <h2 className="font-serif text-2xl sm:text-3xl font-medium text-[#16221A]">
-                Explore sample choral works right now
-              </h2>
-              <p className="text-xs sm:text-sm text-[#526359] mt-1.5 max-w-xl">
-                Try ChoirMate immediately with these pre-analyzed SATB choral pieces. Hear individual vocal parts, inspect solfa, or download practice audio.
-              </p>
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-[#143826] shrink-0" />
+                <span>
+                  <strong className="text-[#16221A]">Sheet Images</strong> PNG, JPG, WebP
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#143826] shrink-0" />
+                <span>
+                  <strong className="text-[#16221A]">Multi-Page PDF</strong> score documents
+                </span>
+              </div>
             </div>
-
-            <button
-              type="button"
-              onClick={onLearnNewScore}
-              className="min-h-[44px] px-6 py-2.5 rounded-full bg-[#153928] hover:bg-[#1C4B35] text-white text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer shrink-0"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Upload Your Own Score (PDF / Image)</span>
-            </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {SAMPLE_SCORES.map((score, index) => (
+          {/* Right Column: Interactive Notation-to-Solfa & SATB Studio Preview */}
+          <div className="lg:col-span-5">
+            <div className="bg-white rounded-2xl border border-[#DFD6C3] shadow-xl overflow-hidden">
+              {/* Top Studio Header Bar */}
+              <div className="bg-[#143826] text-white px-5 py-3.5 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] uppercase tracking-widest text-[#D6B872] font-semibold block">
+                    Interactive Score Translator
+                  </span>
+                  <h2 className="font-serif text-base font-bold">
+                    Key of C Major • 4/4 Time • Treble Staff
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePlayPhrase}
+                  disabled={isPlayingPreview}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#9E7B35] hover:bg-[#B28C3F] disabled:opacity-60 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>{isPlayingPreview ? 'Playing...' : 'Hear Phrase'}</span>
+                </button>
+              </div>
+
+              {/* Interactive 5-Line Staff Visualization */}
+              <div className="p-5 bg-[#FCF9F3] border-b border-[#EAE2D2]">
+                <svg
+                  viewBox="0 0 420 130"
+                  className="w-full h-32 select-none"
+                  role="img"
+                  aria-label="Interactive musical staff showing C4, E4, G4, and C5 with solfa syllables"
+                >
+                  {/* 5 Staff Lines (y = 30, 45, 60, 75, 90) */}
+                  {[30, 45, 60, 75, 90].map((y) => (
+                    <line
+                      key={y}
+                      x1="20"
+                      y1={y}
+                      x2="400"
+                      y2={y}
+                      stroke="#C9BEA9"
+                      strokeWidth="1.4"
+                    />
+                  ))}
+
+                  {/* Treble Clef & Time Signature */}
+                  <text x="28" y="82" fontSize="54" fill="#143826" fontFamily="serif">
+                    𝄞
+                  </text>
+                  <text x="68" y="57" fontSize="20" fontWeight="bold" fill="#143826" fontFamily="serif">
+                    4
+                  </text>
+                  <text x="68" y="85" fontSize="20" fontWeight="bold" fill="#143826" fontFamily="serif">
+                    4
+                  </text>
+
+                  {/* Ledger line for C4 (y = 105) */}
+                  <line x1="112" y1="105" x2="144" y2="105" stroke="#143826" strokeWidth="1.8" />
+
+                  {/* 4 Interactive Noteheads */}
+                  {[
+                    { x: 128, y: 105, stemUp: true }, // C4
+                    { x: 202, y: 90, stemUp: true },  // E4
+                    { x: 276, y: 75, stemUp: true },  // G4
+                    { x: 350, y: 52.5, stemUp: false }, // C5
+                  ].map((pos, idx) => {
+                    const note = PREVIEW_NOTES[idx];
+                    const isSelected = activeNoteIdx === idx;
+                    return (
+                      <g
+                        key={note.pitch}
+                        onClick={() => {
+                          setActiveNoteIdx(idx);
+                          playNoteTone(note.freq);
+                        }}
+                        className="cursor-pointer"
+                      >
+                        {isSelected && (
+                          <rect
+                            x={pos.x - 26}
+                            y="12"
+                            width="52"
+                            height="108"
+                            rx="8"
+                            fill="#143826"
+                            fillOpacity="0.08"
+                            stroke="#9E7B35"
+                            strokeWidth="1.2"
+                          />
+                        )}
+                        {/* Stem */}
+                        <line
+                          x1={pos.stemUp ? pos.x + 8 : pos.x - 8}
+                          y1={pos.y}
+                          x2={pos.stemUp ? pos.x + 8 : pos.x - 8}
+                          y2={pos.stemUp ? pos.y - 36 : pos.y + 36}
+                          stroke={isSelected ? '#143826' : '#32443A'}
+                          strokeWidth="2.2"
+                        />
+                        {/* Notehead */}
+                        <ellipse
+                          cx={pos.x}
+                          cy={pos.y}
+                          rx="9.5"
+                          ry="7"
+                          transform={`rotate(-18 ${pos.x} ${pos.y})`}
+                          fill={isSelected ? '#9E7B35' : '#143826'}
+                        />
+                        {/* Solfa Label Below */}
+                        <text
+                          x={pos.x}
+                          y="124"
+                          textAnchor="middle"
+                          fontSize="11"
+                          fontWeight="bold"
+                          fill={isSelected ? '#9E7B35' : '#143826'}
+                        >
+                          {note.solfa} ({note.pitch})
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                <div className="grid grid-cols-4 gap-2 mt-2">
+                  {PREVIEW_NOTES.map((note, idx) => (
+                    <button
+                      key={note.pitch}
+                      type="button"
+                      onClick={() => {
+                        setActiveNoteIdx(idx);
+                        playNoteTone(note.freq);
+                      }}
+                      className={`py-2 px-2 rounded-lg border text-center transition-all cursor-pointer ${
+                        activeNoteIdx === idx
+                          ? 'bg-[#143826] text-white border-[#143826]'
+                          : 'bg-white text-[#16221A] border-[#E2D9C5] hover:border-[#143826]/40'
+                      }`}
+                    >
+                      <span className="text-xs font-bold block">{note.solfa}</span>
+                      <span className="text-[10px] opacity-80 font-mono block">{note.pitch}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Active Note Breakdown Detail */}
+              <div className="p-5 space-y-3 bg-white">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-[#143826] flex items-center gap-1.5">
+                    <Volume2 className="w-3.5 h-3.5 text-[#9E7B35]" />
+                    Selected Note: {PREVIEW_NOTES[activeNoteIdx].pitch} ({PREVIEW_NOTES[activeNoteIdx].solfa})
+                  </span>
+                  <span className="font-mono text-[#5D6D63]">
+                    {PREVIEW_NOTES[activeNoteIdx].freq} Hz • {PREVIEW_NOTES[activeNoteIdx].duration}
+                  </span>
+                </div>
+                <p className="text-xs text-[#45544B] bg-[#F7F3EA] p-3 rounded-xl border border-[#E6DEC8]">
+                  <strong className="text-[#143826]">Vocal Coaching Tip:</strong>{' '}
+                  {PREVIEW_NOTES[activeNoteIdx].tip}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 4-STEP WORKFLOW SECTION */}
+      <section className="bg-[#F3EDE1] border-y border-[#E2D9C5] py-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12">
+          <div className="max-w-2xl mb-10">
+            <span className="text-xs font-bold uppercase tracking-widest text-[#9E7B35]">
+              How ChoirMate AI Works
+            </span>
+            <h2 className="font-serif text-3xl sm:text-4xl font-bold text-[#143826] mt-1">
+              From raw sheet music to confident rehearsal in four steps.
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              {
+                step: '01',
+                title: 'Upload',
+                icon: Upload,
+                desc: 'Upload your own MusicXML (.musicxml / .xml), sheet music image (PNG, JPG, WebP), or multi-page PDF score.',
+              },
+              {
+                step: '02',
+                title: 'Analyze',
+                icon: Sparkles,
+                desc: 'Our Python music-processing engine extracts real pitches, durations, key & time signatures, and vocal staves.',
+              },
+              {
+                step: '03',
+                title: 'Understand',
+                icon: BookOpen,
+                desc: 'See movable-Do solfa syllables, measure beat counts, interval leaps, and plain-English singing explanations.',
+              },
+              {
+                step: '04',
+                title: 'Practice',
+                icon: AudioLines,
+                desc: 'Isolate Soprano, Alto, Tenor, or Bass in the SATB Voice Studio, download MP3/WAV practice tracks, and check live pitch.',
+              },
+            ].map((item) => {
+              const Icon = item.icon;
+              return (
+                <div
+                  key={item.step}
+                  className="bg-[#FAF5ED] rounded-2xl p-6 border border-[#DFD6C3] flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="font-mono text-xs font-bold text-[#9E7B35]">
+                        STEP {item.step}
+                      </span>
+                      <div className="w-9 h-9 rounded-xl bg-[#143826]/10 text-[#143826] flex items-center justify-center">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                    </div>
+                    <h3 className="font-serif text-xl font-bold text-[#143826] mb-2">
+                      {item.title}
+                    </h3>
+                    <p className="text-xs sm:text-sm text-[#4D5D53] leading-relaxed">
+                      {item.desc}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* EXPLICITLY LABELED DEMO SCORES SECTION */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 pt-16">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+          <div>
+            <span className="text-xs font-bold uppercase tracking-widest text-[#9E7B35]">
+              Explicitly Labeled Reference Library
+            </span>
+            <h2 className="font-serif text-2xl sm:text-3xl font-bold text-[#143826] mt-1">
+              Explore Built-In Demo Scores
+            </h2>
+            <p className="text-sm text-[#4F5F56] mt-1 max-w-2xl">
+              Don’t have a score file handy right now? Choose one of our pre-analyzed demonstration scores below to test the SATB Voice Studio, Solfa Breakdown, and Practice Coach.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onLearnNewScore}
+            className="self-start md:self-auto px-4 py-2.5 rounded-xl bg-[#143826] text-white text-xs font-semibold flex items-center gap-2 hover:bg-[#1B4B33] cursor-pointer"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Upload Your Own Score Instead</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {SAMPLE_SCORES.map((demo) => {
+            const partNames = (demo.parts || []).map((p) => p.name).join(' • ') || 'Lead Vocal';
+            return (
               <div
-                key={score.id}
-                className="bg-[#FAF7F0] border border-[#E8DFD0] rounded-2xl p-5 hover:border-[#153928]/40 hover:shadow-md transition-all flex flex-col justify-between group"
+                key={demo.id}
+                className="bg-white rounded-2xl border border-[#DFD6C3] p-6 flex flex-col justify-between shadow-xs hover:shadow-md transition-shadow"
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-3">
-                    <span className="text-[11px] font-mono text-[#9E7B35] font-semibold">
-                      Sample #{index + 1}
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#8B6914] bg-[#FDF6E4] border border-[#E8CF8C] px-2.5 py-0.5 rounded-md">
+                      Demo Score
                     </span>
-                    <span className="text-[11px] font-medium text-[#65766D] bg-[#EFE8DD] px-2 py-0.5 rounded-full">
-                      {score.keySignature.key}
+                    <span className="font-mono text-xs text-[#5D6D63]">
+                      {demo.keySignature.key} • {demo.timeSignature.numerator}/{demo.timeSignature.denominator}
                     </span>
                   </div>
 
-                  <h3 className="font-serif text-lg font-semibold text-[#16221A] group-hover:text-[#153928] transition-colors">
-                    {score.title}
-                  </h3>
-                  <p className="text-xs text-[#65766D] mt-1">
-                    {score.composer}
+                  <h3 className="font-serif text-xl font-bold text-[#143826]">{demo.title}</h3>
+                  <p className="text-xs text-[#637269] mt-0.5">{demo.composer}</p>
+
+                  <p className="text-xs text-[#45544B] mt-3 line-clamp-2 leading-relaxed">
+                    {demo.simpleExplanation.essence}
                   </p>
 
-                  <p className="text-xs text-[#4A5850] mt-3 line-clamp-2 leading-relaxed">
-                    {score.keySignature.explanation}
-                  </p>
+                  <div className="mt-4 pt-3 border-t border-[#EFE8DA] text-[11px] text-[#58685E] space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#143826] shrink-0" />
+                      <span>Parts: {partNames}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#143826] shrink-0" />
+                      <span>Range: {demo.simpleExplanation.range} • {demo.tempo} BPM</span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-5 pt-4 border-t border-[#E8DFD0] flex items-center justify-between gap-3">
-                  <div className="text-[11px] text-[#65766D]">
-                    {score.notes.length} notes · {score.tempo} BPM
-                  </div>
-
+                <div className="mt-5 pt-3 border-t border-[#EFE8DA] grid grid-cols-3 gap-2">
                   <button
                     type="button"
-                    onClick={() => onSelectSample(score)}
-                    className="min-h-[38px] px-4 py-1.5 rounded-full bg-[#153928] group-hover:bg-[#1C4B35] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    onClick={() => onSelectSample(demo, 'results')}
+                    className="py-2 px-2 rounded-lg bg-[#143826] hover:bg-[#1B4B33] text-white text-[11px] font-semibold text-center transition-colors cursor-pointer"
                   >
-                    <Play className="w-3 h-3 fill-current" />
-                    <span>Open &amp; Sing</span>
+                    Breakdown
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectSample(demo, 'voice-studio')}
+                    className="py-2 px-2 rounded-lg border border-[#143826]/30 hover:bg-[#143826]/5 text-[#143826] text-[11px] font-semibold text-center transition-colors cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <AudioLines className="w-3 h-3 shrink-0" />
+                    <span>SATB</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectSample(demo, 'practice')}
+                    className="py-2 px-2 rounded-lg border border-[#143826]/30 hover:bg-[#143826]/5 text-[#143826] text-[11px] font-semibold text-center transition-colors cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <Mic className="w-3 h-3 shrink-0" />
+                    <span>Practice</span>
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       </section>
     </div>

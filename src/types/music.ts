@@ -192,7 +192,6 @@ export interface RecognitionSummary {
 }
 
 export interface ScoreAnalysis {
-  processingProvider?: string;
   id: string;
   title: string;
   composer?: string;
@@ -227,3 +226,95 @@ export interface ScoreAnalysis {
     isLocalAi: boolean;
   };
 }
+
+export type ScoreProvenance = 'upload' | 'demo';
+
+export interface HealthStatus {
+  status: string;
+  openWeight: boolean;
+  pythonServiceActive: boolean;
+  pythonBackendMode?: 'local' | 'remote';
+  pythonAuthConfigured?: boolean;
+  pythonAuthStatus?: 'authenticated' | 'unauthorized' | 'unconfigured' | 'unverified' | 'offline';
+  modelLoaded: boolean;
+  omrAvailable?: boolean;
+  omrEngineStatus?: 'ready' | 'unavailable_in_environment' | 'backend_offline';
+  missingOmrDependencies?: string[];
+  pdfSupport?: boolean;
+  musicXmlSupport?: boolean;
+  voiceStudioAvailable?: boolean;
+  audioExportAvailable?: boolean;
+  pythonServiceUrl: string;
+  pythonHost: string;
+  pythonPort: number;
+  recognitionEngine: string;
+  aiTeacher: string;
+  modelLicense: string;
+  sampleScoresCount: number;
+}
+
+export interface VoiceStudioNote {
+  pitch: string;
+  frequency: number;
+  duration: number;
+  isRest: boolean;
+}
+
+export interface VoiceStudioVoice {
+  id: string;
+  partId: string;
+  partName: string;
+  staffIndex: number;
+  voiceId: string;
+  notes: VoiceStudioNote[];
+}
+
+export interface VoiceExtractionResponse {
+  success: boolean;
+  voices?: VoiceStudioVoice[];
+  errorCode?: string;
+  error?: string;
+}
+
+export interface VoiceAudioResponse {
+  success: boolean;
+  audioBase64?: string;
+  mimeType?: string;
+  errorCode?: string;
+  error?: string;
+}
+
+export interface ExportAudioResponse {
+  success: boolean;
+  audioBase64?: string;
+  mimeType?: string;
+  fileName?: string;
+  format?: 'mp3' | 'wav';
+  durationSeconds?: number;
+  noteCount?: number;
+  sampleRate?: number;
+  encoder?: string;
+  errorCode?: string;
+  error?: string;
+}
+
+export interface PdfPreviewPage {
+  pageNumber: number;
+  width: number;
+  height: number;
+  dataUrl: string;
+  thumbnailDataUrl: string;
+  status: string;
+  warning?: string | null;
+}
+
+export interface PdfPreviewResponse {
+  success: boolean;
+  fileName?: string;
+  pageCount?: number;
+  renderedPageCount?: number;
+  pages?: PdfPreviewPage[];
+  errorCode?: string;
+  error?: string;
+}
+

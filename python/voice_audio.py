@@ -2,9 +2,16 @@
 """Synchronized SATB audio rendering for ChoirMate Voice Studio."""
 
 import io
+import math
 import wave
+import array
 
-import numpy as np
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore
+    HAS_NUMPY = False
 
 try:
     from .audio_exporter import SAMPLE_RATE, _synthesize_single_tone
@@ -84,7 +91,45 @@ def render_voice_audio(voices, selected_voice_ids=None, tempo=88):
     )
 
     total_seconds = total_beats * seconds_per_beat + 0.25
-    sample_count = max(1, int(np.ceil(total_seconds * SAMPLE_RATE)))
+    sample_count = max(1, int(math.ceil(total_seconds * SAMPLE_RATE)))
+
+    if not HAS_NUMPY:
+        mix_list = [0.0] * sample_count
+        for voice in selected:
+            for note in voice.get("notes", []):
+                if note.get("isRest") or not note.get("pitch"):
+                    continue
+                frequency = pitch_to_frequency(note["pitch"])
+                start_seconds = float(note["startBeat"]) * seconds_per_beat
+                duration_seconds = float(note["duration"]) * seconds_per_beat
+                if duration_seconds <= 0:
+                    continue
+                start_sample = max(0, int(round(start_seconds * SAMPLE_RATE)))
+                if start_sample >= sample_count:
+                    continue
+                tone = _synthesize_single_tone(
+                    frequency,
+                    duration_seconds,
+                    voice="choir",
+                    sample_rate=SAMPLE_RATE,
+                )
+                end_sample = min(sample_count, start_sample + len(tone))
+                for idx in range(start_sample, end_sample):
+                    mix_list[idx] += tone[idx - start_sample]
+
+        peak = max((abs(x) for x in mix_list), default=0.0)
+        gain_mult = (0.9 / max(peak, 0.9)) if peak > 0 else 1.0
+        pcm_arr = array.array(
+            "h",
+            (max(-32768, min(32767, int(round(x * gain_mult * 32767.0)))) for x in mix_list)
+        )
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(SAMPLE_RATE)
+            wav_file.writeframes(pcm_arr.tobytes())
+        return output.getvalue(), round(len(pcm_arr) / SAMPLE_RATE, 2)
 
     mix = np.zeros(sample_count, dtype=np.float64)
 

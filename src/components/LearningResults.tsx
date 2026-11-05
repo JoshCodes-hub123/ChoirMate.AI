@@ -26,6 +26,8 @@ import {
   ChevronRight,
   Columns,
   FileText,
+  AudioLines,
+  FileUp,
 } from 'lucide-react';
 import { ScoreAnalysis, MusicNote, VocalPart } from '../types/music';
 import { InteractiveStave } from './InteractiveStave';
@@ -42,6 +44,8 @@ interface LearningResultsProps {
   onSelectPart: (partId: string) => void;
   onScoreUpdated: (updatedScore: ScoreAnalysis) => void;
   onStartPractice: () => void;
+  onOpenVoiceStudio?: () => void;
+  onUploadAnother?: () => void;
 }
 
 const VALID_PITCH_STEPS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
@@ -64,6 +68,8 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
   onSelectPart,
   onScoreUpdated,
   onStartPractice,
+  onOpenVoiceStudio,
+  onUploadAnother,
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -420,6 +426,15 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div>
             <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-md border ${
+                  score.isDemonstration
+                    ? 'bg-[#FDF6E4] text-[#8B6914] border-[#E8CF8C]'
+                    : 'bg-[#E9F3EC] text-[#143826] border-[#B8D8C4]'
+                }`}
+              >
+                {score.isDemonstration ? 'Demo Score Mode' : 'Uploaded Score Analysis'}
+              </span>
               <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-md bg-[#FDF3EB] text-[#B85D19] border border-[#F5DEC9]">
                 {score.keySignature?.homeSolfa || 'Movable-Do Solfa'}
               </span>
@@ -433,7 +448,7 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
                 Clef: {activePart.clef}
               </span>
               <span className="text-xs font-mono text-[#5A4D41] bg-[#EAE2D4] px-2.5 py-1 rounded-md">
-                Engine: {score.processingProvider || (score.source === 'gemini_fallback_engine' ? 'Gemini-assisted analysis' : 'Primary engine')}
+                Engine: {score.processingProvider || 'Python Music Theory & HOMR Engine'}
               </span>
               {summary && (
                 <span
@@ -455,7 +470,7 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
                 </span>
               )}
             </div>
-            <h2 className="text-2xl sm:text-3xl font-serif font-bold text-[#2A2622] mt-2">
+            <h2 className="text-2xl sm:text-3xl font-serif font-bold text-[#143826] mt-2">
               {score.title}
             </h2>
             {score.composer && (
@@ -466,25 +481,47 @@ export const LearningResults: React.FC<LearningResultsProps> = ({
           </div>
 
           {/* Primary Actions */}
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {onUploadAnother && (
+              <button
+                type="button"
+                onClick={onUploadAnother}
+                className="min-h-[42px] px-3.5 py-2 rounded-xl font-semibold text-xs bg-white hover:bg-[#F3EFE6] text-[#143826] border border-[#DED8CC] flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <FileUp className="w-3.5 h-3.5 text-[#9E7B35]" />
+                <span>Upload Another</span>
+              </button>
+            )}
+
             {/* Export MusicXML Button */}
             <button
               type="button"
               onClick={() => downloadMusicXml(score)}
-              className="min-h-[44px] px-4 py-2.5 rounded-xl font-semibold text-xs bg-white hover:bg-[#F3EFE6] text-[#2A2622] border border-[#DED8CC] flex items-center gap-1.5 transition-all cursor-pointer"
+              className="min-h-[42px] px-3.5 py-2 rounded-xl font-semibold text-xs bg-white hover:bg-[#F3EFE6] text-[#2A2622] border border-[#DED8CC] flex items-center gap-1.5 transition-all cursor-pointer"
               title="Download full multi-part MusicXML 4.0 file"
             >
               <Download className="w-3.5 h-3.5 text-[#B85D19]" />
               <span>Export MusicXML</span>
             </button>
 
+            {onOpenVoiceStudio && (
+              <button
+                type="button"
+                onClick={onOpenVoiceStudio}
+                className="min-h-[42px] px-4 py-2 rounded-xl font-semibold text-xs bg-[#9E7B35] hover:bg-[#87682A] text-white flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+              >
+                <AudioLines className="w-3.5 h-3.5" />
+                <span>Open SATB Voice Studio</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onStartPractice}
-              className="min-h-[44px] px-5 py-2.5 rounded-xl font-semibold text-xs bg-[#1F7A4C] hover:bg-[#18633D] text-white flex items-center gap-2 transition-all cursor-pointer shadow-xs"
+              className="min-h-[42px] px-4 py-2 rounded-xl font-semibold text-xs bg-[#143826] hover:bg-[#1B4B33] text-white flex items-center gap-2 transition-all cursor-pointer shadow-xs"
             >
               <Mic className="w-3.5 h-3.5" />
-              <span>Open Sight-Singing Practice Coach</span>
+              <span>Practice Coach</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>

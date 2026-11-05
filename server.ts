@@ -6,7 +6,6 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { SAMPLE_SCORES } from './src/data/sampleScores.ts';
-import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
@@ -25,7 +24,50 @@ const rootDir = fs.existsSync(path.join(__dirname, 'package.json'))
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://127.0.0.1:5001';
+const PYTHON_SERVICE_URL = (
+  process.env.PYTHON_SERVICE_URL ||
+  process.env.PYTHON_BACKEND_URL ||
+  'http://127.0.0.1:5001'
+)
+  .trim()
+  .replace(/\/+$/, '');
+
+const PYTHON_SERVICE_SECRET = (
+  process.env.PYTHON_SERVICE_SECRET ||
+  process.env.CHOIRMATE_BACKEND_SECRET ||
+  ''
+).trim();
+
+function isLocalPythonServiceUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '0.0.0.0'
+    );
+  } catch {
+    return url.includes('127.0.0.1') || url.includes('localhost');
+  }
+}
+
+const IS_LOCAL_PYTHON_BACKEND = isLocalPythonServiceUrl(PYTHON_SERVICE_URL);
+
+function buildPythonHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'ngrok-skip-browser-warning': 'true',
+    ...(extra || {}),
+  };
+  if (PYTHON_SERVICE_SECRET) {
+    headers['X-ChoirMate-Secret'] = PYTHON_SERVICE_SECRET;
+    headers['Authorization'] = `Bearer ${PYTHON_SERVICE_SECRET}`;
+  }
+  return headers;
+}
+
+const FRIENDLY_HOMR_UNAVAILABLE_MESSAGE =
+  'Sheet music image and PDF recognition is temporarily unavailable because the HOMR Optical Music Recognition engine is currently offline. You can still upload MusicXML (.musicxml or .xml) files for full note analysis, SATB voice extraction, and practice audio generation.';
 
 // Production CORS Middleware for cross-origin Vercel frontend requests
 app.use((req, res, next) => {
@@ -84,32 +126,70 @@ const audioExportCache = new FastLRUCache<any>(50, 45 * 60 * 1000);
 let pythonDaemon: ChildProcess | null = null;
 let isBootstrappingPython = false;
 
-async function checkPythonServiceHealth(): Promise<{ active: boolean; modelLoaded: boolean }> {
+interface PythonHealthInfo {
+  active: boolean;
+  modelLoaded: boolean;
+  omrAvailable: boolean;
+  omrEngineStatus: 'ready' | 'unavailable_in_environment' | 'backend_offline';
+  missingOmrDependencies: string[];
+  pdfSupport: boolean;
+  musicXmlSupport: boolean;
+  voiceStudioAvailable: boolean;
+  audioExportAvailable: boolean;
+}
+
+async function checkPythonServiceHealth(): Promise<PythonHealthInfo> {
   try {
     const pyRes = await fetch(`${PYTHON_SERVICE_URL}/health`, {
-      signal: AbortSignal.timeout(1500),
+      headers: buildPythonHeaders(),
+      signal: AbortSignal.timeout(IS_LOCAL_PYTHON_BACKEND ? 1800 : 4000),
     });
     if (pyRes.ok) {
       const healthData: any = await pyRes.json();
+      const omrAvailable = Boolean(healthData?.omrAvailable ?? healthData?.modelLoaded);
       return {
         active: true,
         modelLoaded: Boolean(healthData?.modelLoaded),
+        omrAvailable,
+        omrEngineStatus: omrAvailable ? 'ready' : 'unavailable_in_environment',
+        missingOmrDependencies: Array.isArray(healthData?.missingOmrDependencies)
+          ? healthData.missingOmrDependencies
+          : [],
+        pdfSupport: Boolean(healthData?.pdfSupport),
+        musicXmlSupport: healthData?.musicXmlSupport !== false,
+        voiceStudioAvailable: healthData?.voiceStudioAvailable !== false,
+        audioExportAvailable: healthData?.audioExportAvailable !== false,
       };
     }
   } catch {
     // Service not reachable yet
   }
-  return { active: false, modelLoaded: false };
+  return {
+    active: false,
+    modelLoaded: false,
+    omrAvailable: false,
+    omrEngineStatus: 'backend_offline',
+    missingOmrDependencies: [],
+    pdfSupport: false,
+    musicXmlSupport: false,
+    voiceStudioAvailable: false,
+    audioExportAvailable: false,
+  };
 }
 
 async function ensurePythonServiceActive(): Promise<boolean> {
   let health = await checkPythonServiceHealth();
   if (health.active) return true;
 
+  if (!IS_LOCAL_PYTHON_BACKEND) {
+    // Remote Python server (e.g. Windows laptop tunnel) cannot be spawned locally
+    return false;
+  }
+
   startPythonDaemon();
 
-  for (let attempt = 0; attempt < 6; attempt++) {
-    await new Promise((r) => setTimeout(r, 500));
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await new Promise((r) => setTimeout(r, 400));
     health = await checkPythonServiceHealth();
     if (health.active) return true;
   }
@@ -117,7 +197,7 @@ async function ensurePythonServiceActive(): Promise<boolean> {
 }
 
 function startPythonDaemon(): void {
-  if (pythonDaemon || isBootstrappingPython) return;
+  if (!IS_LOCAL_PYTHON_BACKEND || pythonDaemon || isBootstrappingPython) return;
 
   let hasPy3 = false;
   try {
@@ -128,55 +208,68 @@ function startPythonDaemon(): void {
   }
 
   if (!hasPy3) {
-    console.log('[ChoirMate Server] Python3 not present in container environment. Running in full Node.js + Gemini Vision OMR mode.');
+    console.warn('[ChoirMate Server] python3 not present in container environment.');
     return;
   }
 
   const servicePy = path.join(rootDir, 'python', 'service.py');
   if (!fs.existsSync(servicePy)) {
-    console.log('[ChoirMate Server] python/service.py not found. Running in full Node.js + Gemini Vision OMR mode.');
+    console.warn('[ChoirMate Server] python/service.py not found.');
     return;
   }
 
-  checkPythonServiceHealth().then(({ active }) => {
-    if (active || pythonDaemon || isBootstrappingPython) return;
+  isBootstrappingPython = true;
+  checkPythonServiceHealth()
+    .then(({ active }) => {
+      isBootstrappingPython = false;
+      if (active || pythonDaemon) return;
 
-    console.log('[ChoirMate Server] Starting Python Open-Weight FastAPI service on 127.0.0.1:5001...');
-    const proc = spawn(
-      'python3',
-      ['-m', 'uvicorn', 'python.service:app', '--host', '127.0.0.1', '--port', '5001'],
-      {
+      let hasUvicorn = false;
+      try {
+        const uvCheck = spawnSync('python3', ['-c', 'import uvicorn, fastapi'], { stdio: 'ignore' });
+        hasUvicorn = uvCheck.status === 0;
+      } catch {
+        hasUvicorn = false;
+      }
+
+      const args = hasUvicorn
+        ? ['-m', 'uvicorn', 'python.service:app', '--host', '127.0.0.1', '--port', '5001']
+        : [servicePy];
+
+      console.log(
+        `[ChoirMate Server] Starting local Python music-processing service on 127.0.0.1:5001 (${hasUvicorn ? 'FastAPI/Uvicorn' : 'stdlib HTTP'})...`
+      );
+      const proc = spawn('python3', args, {
         cwd: rootDir,
         stdio: ['ignore', 'pipe', 'pipe'],
-      }
-    );
+      });
 
-    pythonDaemon = proc;
-    let stderrBuf = '';
+      pythonDaemon = proc;
 
-    proc.on('error', (err: any) => {
-      pythonDaemon = null;
-      console.warn('[ChoirMate Server] Python daemon unavailable, running in Node.js + Gemini mode:', err.message);
+      proc.on('error', (err: any) => {
+        pythonDaemon = null;
+        console.warn('[ChoirMate Server] Python daemon startup error:', err.message);
+      });
+
+      proc.stdout?.on('data', (chunk) => {
+        const text = chunk.toString().trim();
+        if (text) console.log(`[Python Service] ${text}`);
+      });
+
+      proc.stderr?.on('data', (chunk) => {
+        const text = chunk.toString().trim();
+        if (text) console.error(`[Python Service] ${text}`);
+      });
+
+      proc.on('close', (code) => {
+        pythonDaemon = null;
+        console.log(`[ChoirMate Server] Python service closed (code ${code}).`);
+      });
+    })
+    .catch((err) => {
+      isBootstrappingPython = false;
+      console.warn('[ChoirMate Server] Python health check skipped:', err?.message);
     });
-
-    proc.stdout?.on('data', (chunk) => {
-      const text = chunk.toString().trim();
-      if (text) console.log(`[Python Service] ${text}`);
-    });
-
-    proc.stderr?.on('data', (chunk) => {
-      const text = chunk.toString();
-      stderrBuf += text;
-      if (text.trim()) console.error(`[Python Service] ${text.trim()}`);
-    });
-
-    proc.on('close', (code) => {
-      pythonDaemon = null;
-      console.log(`[ChoirMate Server] Python service closed (code ${code}). Node.js + Gemini active.`);
-    });
-  }).catch((err) => {
-    console.warn('[ChoirMate Server] Python health check skipped:', err?.message);
-  });
 }
 
 function parseJsonFromStdout(stdoutData: string): any {
@@ -199,21 +292,29 @@ function parseJsonFromStdout(stdoutData: string): any {
 }
 
 app.get('/api/health', async (_req, res) => {
-  const { active: pythonServiceActive, modelLoaded } = await checkPythonServiceHealth();
-  if (!pythonServiceActive) {
-    startPythonDaemon();
+  let health = await checkPythonServiceHealth();
+  if (!health.active && IS_LOCAL_PYTHON_BACKEND) {
+    await ensurePythonServiceActive();
+    health = await checkPythonServiceHealth();
   }
 
   res.json({
     status: 'ok',
     openWeight: true,
-    pythonServiceActive,
-    modelLoaded,
-    pythonServiceUrl: PYTHON_SERVICE_URL,
-    pythonHost: '127.0.0.1',
+    pythonServiceActive: health.active,
+    pythonBackendMode: IS_LOCAL_PYTHON_BACKEND ? 'local' : 'remote',
+    modelLoaded: health.modelLoaded,
+    omrAvailable: health.omrAvailable,
+    omrEngineStatus: health.omrEngineStatus,
+    missingOmrDependencies: health.missingOmrDependencies,
+    pdfSupport: health.pdfSupport,
+    musicXmlSupport: health.musicXmlSupport,
+    voiceStudioAvailable: health.voiceStudioAvailable,
+    audioExportAvailable: health.audioExportAvailable,
+    pythonServiceUrl: IS_LOCAL_PYTHON_BACKEND ? PYTHON_SERVICE_URL : '[remote-configured]',
+    pythonHost: IS_LOCAL_PYTHON_BACKEND ? '127.0.0.1' : 'remote',
     pythonPort: 5001,
     recognitionEngine: 'HOMR (Full-Score Optical Music Recognition)',
-    pdfSupport: true,
     aiTeacher: 'SmolLM2-360M-Instruct-GGUF',
     modelLicense: 'Apache 2.0',
     sampleScoresCount: SAMPLE_SCORES.length,
@@ -223,15 +324,13 @@ app.get('/api/health', async (_req, res) => {
 for (const endpoint of ['voices', 'audio'] as const) {
   app.post(`/api/voice-studio/${endpoint}`, async (req, res) => {
     try {
-      const pyResponse = await fetch(
-        `${PYTHON_SERVICE_URL}/voice-studio/${endpoint}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(req.body),
-          signal: AbortSignal.timeout(120000),
-        }
-      );
+      await ensurePythonServiceActive();
+      const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/voice-studio/${endpoint}`, {
+        method: 'POST',
+        headers: buildPythonHeaders(),
+        body: JSON.stringify(req.body),
+        signal: AbortSignal.timeout(120000),
+      });
 
       const result = await pyResponse.json();
       return res.status(pyResponse.status).json(result);
@@ -240,11 +339,12 @@ for (const endpoint of ['voices', 'audio'] as const) {
       return res.status(503).json({
         success: false,
         errorCode: 'VOICE_STUDIO_UNAVAILABLE',
-        error: 'Voice Studio is temporarily unavailable. Please try again.',
+        error: 'Python Voice Studio service is currently unreachable. Please check backend health.',
       });
     }
   });
 }
+
 app.post('/api/preview-pdf', async (req, res) => {
   try {
     const { pdfBase64, fileName } = req.body || {};
@@ -272,229 +372,44 @@ app.post('/api/preview-pdf', async (req, res) => {
 
     await ensurePythonServiceActive();
 
-    try {
-      const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/preview-pdf`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(60000),
-      });
+    const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/preview-pdf`, {
+      method: 'POST',
+      headers: buildPythonHeaders(),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(60000),
+    });
 
-      const contentType = pyResponse.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const pyJson: any = await pyResponse.json();
-        if (pyResponse.ok && pyJson.success) {
-          pdfPreviewCache.set(cacheKey, pyJson);
-          return res.json(pyJson);
-        }
+    const contentType = pyResponse.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const pyJson: any = await pyResponse.json();
+      if (pyResponse.status === 401 || pyResponse.status === 403) {
+        return res.status(pyResponse.status).json(pyJson);
       }
-    } catch (httpErr) {
-      console.warn('[ChoirMate Server] Python preview-pdf unreachable, using robust PDF fallback');
+      if (pyResponse.ok && pyJson.success) {
+        pdfPreviewCache.set(cacheKey, pyJson);
+        return res.json(pyJson);
+      }
+      return res.status(422).json({
+        success: false,
+        errorCode: pyJson?.errorCode || 'PDF_PREVIEW_FAILED',
+        error: pyJson?.error || FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+      });
     }
 
-    const fallbackPdfPreview = {
-      success: true,
-      pageCount: 1,
-      pages: [
-        {
-          pageNumber: 1,
-          width: 800,
-          height: 1100,
-          dataUrl: pdfBase64,
-          thumbnailDataUrl: pdfBase64,
-          status: 'ok',
-        }
-      ],
-      fileName: fileName || 'score.pdf'
-    };
-    pdfPreviewCache.set(cacheKey, fallbackPdfPreview);
-    return res.json(fallbackPdfPreview);
+    return res.status(502).json({
+      success: false,
+      errorCode: 'PDF_PREVIEW_INVALID_RESPONSE',
+      error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+    });
   } catch (err: any) {
     console.error('Server error in /api/preview-pdf:', err);
-    const fallbackPdfPreview = {
-      success: true,
-      pageCount: 1,
-      pages: [
-        {
-          pageNumber: 1,
-          width: 800,
-          height: 1100,
-          dataUrl: req.body?.pdfBase64 || '',
-          thumbnailDataUrl: req.body?.pdfBase64 || '',
-          status: 'ok',
-        }
-      ],
-      fileName: req.body?.fileName || 'score.pdf'
-    };
-    return res.json(fallbackPdfPreview);
-  }
-});
-
-async function processScoreWithGeminiFallback(payload: {
-  imageBase64?: string;
-  pages?: string[];
-  pdfBase64?: string;
-  pdfFileName?: string;
-  musicxml?: string;
-  title?: string;
-  composer?: string;
-  tempo?: number;
-}): Promise<any> {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured on the backend.');
-  }
-
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
-
-  const targetImage = payload.imageBase64 || (payload.pages && payload.pages[0]) || null;
-  const promptText = `You are an expert Optical Music Recognition (OMR) AI, musicologist, and choral sight-singing professor. 
-Carefully examine the attached sheet music image/PDF page. Perform real optical music recognition (OMR) on this specific image. Extract the actual musical notes, pitches (e.g. C4, D4, E4, F4, G4, A4, B4, C5), solfa syllables (Do, Re, Mi, Fa, Sol, La, Ti, Do), rhythms, key signature, time signature, tempo, measures, and lyrics visible in the uploaded score image.
-
-Return a valid JSON object matching this exact TypeScript structure:
-{
-  "title": "${payload.title || 'Uploaded Choral Score'}",
-  "composer": "${payload.composer || 'Detected Composer'}",
-  "source": "gemini_vision_omr",
-  "processingProvider": "Gemini 3.8 Flash Vision OMR",
-  "isGeminiFallback": false,
-  "clef": "treble",
-  "tempo": ${Number(payload.tempo || 88)},
-  "keySignature": {
-    "key": "Detected Key (e.g. C Major, G Major)",
-    "tonality": "Major/Minor",
-    "sharps": 0,
-    "flats": 0,
-    "fifths": 0,
-    "homeNote": "C",
-    "homeSolfa": "Do",
-    "explanation": "Key signature detected from the uploaded score."
-  },
-  "timeSignature": {
-    "numerator": 4,
-    "denominator": 4,
-    "beatsPerMeasure": 4,
-    "beatUnit": "quarter",
-    "explanation": "Time signature detected from the score.",
-    "countingPattern": "1 - 2 - 3 - 4"
-  },
-  "parts": [
-    {
-      "id": "S1",
-      "name": "Soprano",
-      "clef": "treble",
-      "staffIndex": 0,
-      "notes": [
-        { "pitch": "C4", "solfa": "Do", "duration": 1, "measure": 1, "beat": 1, "frequency": 261.63, "lyric": "Word" }
-      ],
-      "measures": [
-        { "measureNumber": 1, "expectedBeats": 4, "actualBeats": 4, "confidence": "high", "noteCount": 1, "restCount": 0 }
-      ]
-    }
-  ],
-  "rhythmBreakdown": {
-    "patterns": [
-      { "name": "Quarter Note", "durationInBeats": 1, "countWord": "1", "explanation": "Steady beat", "symbol": "♩" }
-    ],
-    "countingGuide": "Count steadily: 1 - 2 - 3 - 4",
-    "advice": "Keep breath support steady across each measure."
-  },
-  "simpleExplanation": {
-    "essence": "Musical analysis of the uploaded score image.",
-    "range": "C4 - G5",
-    "melodicShape": "Stepwise and skip motion.",
-    "choralTip": "Blend vowel sounds across the section."
-  },
-  "practiceSteps": [
-    { "step": 1, "title": "Solfa Chanting", "description": "Chant the rhythm using solfa syllables.", "focus": "Rhythm & Pitch Accuracy" },
-    { "step": 2, "title": "Melody Sighting", "description": "Sing along with the practice guide.", "focus": "Tuning & Resonance" }
-  ],
-  "recognitionSummary": {
-    "overallConfidence": "high",
-    "totalEvents": 4,
-    "sungNotesCount": 4,
-    "restsCount": 0,
-    "uncertainMeasuresCount": 0,
-    "needsReview": false
-  }
-}
-
-You MUST analyze the attached image and generate accurate notes and measures corresponding to what is visible in the image.`;
-
-  const contents: any[] = [];
-  if (targetImage) {
-    const cleanBase64 = targetImage.includes(',') ? targetImage.split(',', 2)[1] : targetImage;
-    const mimeType = targetImage.includes('image/jpeg') || targetImage.includes('jpg') ? 'image/jpeg' : 'image/png';
-    contents.push({
-      inlineData: {
-        mimeType,
-        data: cleanBase64,
-      }
+    return res.status(503).json({
+      success: false,
+      errorCode: 'PDF_PREVIEW_UNAVAILABLE',
+      error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
     });
   }
-  contents.push({ text: promptText });
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
-    contents,
-    config: {
-      responseMimeType: "application/json",
-      systemInstruction: "You are an expert music analysis engine for ChoirMate AI. Return strictly valid JSON matching the requested schema.",
-    }
-  });
-
-  const rawText = response.text;
-  if (!rawText) {
-    throw new Error('Gemini returned empty response for sheet music analysis.');
-  }
-
-  const parsedJson = JSON.parse(rawText.trim());
-  if (!parsedJson || typeof parsedJson !== 'object') {
-    throw new Error('Gemini output could not be parsed as valid score JSON.');
-  }
-
-  parsedJson.source = 'gemini_fallback_engine';
-  parsedJson.processingProvider = 'Gemini-assisted analysis';
-  parsedJson.isGeminiFallback = true;
-  if (!parsedJson.id) {
-    parsedJson.id = 'gemini_score_' + Date.now();
-  }
-  if (!parsedJson.parts || !Array.isArray(parsedJson.parts) || parsedJson.parts.length === 0) {
-    parsedJson.parts = [
-      {
-        id: 'S1',
-        name: 'Soprano',
-        clef: parsedJson.clef || 'treble',
-        staffIndex: 0,
-        notes: parsedJson.notes || [],
-        measures: parsedJson.measures || []
-      }
-    ];
-  }
-  if (!parsedJson.notes && parsedJson.parts[0]?.notes) {
-    parsedJson.notes = parsedJson.parts[0].notes;
-  }
-  if (targetImage && !parsedJson.imageUrl) {
-    parsedJson.imageUrl = targetImage;
-  }
-  if (payload.pages && !parsedJson.pageImages) {
-    parsedJson.pageImages = payload.pages;
-  }
-
-  return {
-    success: true,
-    data: parsedJson,
-    source: 'gemini_fallback_engine',
-    processingProvider: 'Gemini-assisted analysis',
-  };
-}
+});
 
 app.post('/api/analyze-sheet', async (req, res) => {
   try {
@@ -543,8 +458,8 @@ app.post('/api/analyze-sheet', async (req, res) => {
     }
 
     const payload = {
-      imageBase64: pageImages[0] || imageBase64,
-      pages: pageImages.length > 0 ? pageImages : undefined,
+      imageBase64: pageImages.length === 1 && !pdfBase64 ? pageImages[0] : undefined,
+      pages: pageImages.length > 1 && !pdfBase64 ? pageImages : undefined,
       pdfBase64: pdfBase64 || undefined,
       pdfFileName: pdfFileName || undefined,
       musicxml,
@@ -558,7 +473,7 @@ app.post('/api/analyze-sheet', async (req, res) => {
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildPythonHeaders(),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(240000),
       });
@@ -566,6 +481,9 @@ app.post('/api/analyze-sheet', async (req, res) => {
       const contentType = pyResponse.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const pyJson: any = await pyResponse.json();
+        if (pyResponse.status === 401 || pyResponse.status === 403) {
+          return res.status(pyResponse.status).json(pyJson);
+        }
         if (pyResponse.ok && pyJson.success && pyJson.data) {
           if (!pyJson.data.pageImages && pageImages.length > 0) {
             pyJson.data.imageUrl = pageImages[0];
@@ -577,16 +495,27 @@ app.post('/api/analyze-sheet', async (req, res) => {
           return res.status(422).json({
             success: false,
             errorCode: pyJson?.errorCode || 'OMR_RECOGNITION_FAILED',
-            error: pyJson?.error || 'HOMR Optical Music Recognition could not decode valid musical notes from the uploaded score.',
+            error:
+              pyJson?.error ||
+              (musicxml
+                ? 'Could not parse the uploaded MusicXML file.'
+                : FRIENDLY_HOMR_UNAVAILABLE_MESSAGE),
             sectionDiagnostics: pyJson?.sectionDiagnostics || [],
-            omrAttempted: true,
+            omrAttempted: Boolean(pyJson?.omrAttempted),
             recognitionEngine: 'HOMR',
           });
         }
       }
     } catch (httpErr) {
+      if (!IS_LOCAL_PYTHON_BACKEND) {
+        return res.status(503).json({
+          success: false,
+          errorCode: 'HOMR_ENVIRONMENT_REQUIRED',
+          error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+        });
+      }
       console.warn(
-        '[ChoirMate Server] Python FastAPI service on port 5001 unreachable, falling back to python/analyze.py CLI:',
+        '[ChoirMate Server] Local Python service (127.0.0.1:5001) unreachable, falling back to local python/analyze.py CLI:',
         httpErr instanceof Error ? httpErr.message : httpErr
       );
     }
@@ -605,15 +534,16 @@ app.post('/api/analyze-sheet', async (req, res) => {
       stderrData += chunk.toString();
     });
 
-    pythonProcess.on('close', (code) => {
+    pythonProcess.on('close', () => {
       if (stderrData.trim()) {
         console.error('[Python CLI stderr]:', stderrData.trim());
       }
 
       if (!stdoutData.trim()) {
-        return res.status(500).json({
+        return res.status(503).json({
           success: false,
-          error: 'HOMR OMR recognition process produced no output.',
+          errorCode: 'HOMR_ENVIRONMENT_REQUIRED',
+          error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
         });
       }
 
@@ -629,14 +559,15 @@ app.post('/api/analyze-sheet', async (req, res) => {
         } else {
           return res.status(422).json({
             success: false,
-            error: parsed.error || 'HOMR Optical Music Recognition failed to decode notes from the score.',
+            errorCode: parsed.errorCode || 'OMR_RECOGNITION_FAILED',
+            error: parsed.error || FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
           });
         }
       } catch (parseError) {
         console.error('Failed to parse Python pipeline JSON output:', stdoutData, parseError);
         return res.status(500).json({
           success: false,
-          error: 'Failed to parse HOMR OMR recognition response.',
+          error: 'Failed to parse score recognition response.',
         });
       }
     });
@@ -675,10 +606,15 @@ app.post('/api/recalculate-score', async (req, res) => {
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/recalculate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildPythonHeaders(),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(60000),
       });
+
+      if (pyResponse.status === 401 || pyResponse.status === 403) {
+        const authJson: any = await pyResponse.json().catch(() => ({}));
+        return res.status(pyResponse.status).json(authJson);
+      }
 
       if (pyResponse.ok) {
         const pyJson: any = await pyResponse.json();
@@ -693,6 +629,13 @@ app.post('/api/recalculate-score', async (req, res) => {
         });
       }
     } catch (httpErr) {
+      if (!IS_LOCAL_PYTHON_BACKEND) {
+        return res.status(503).json({
+          success: false,
+          errorCode: 'RECALCULATE_UNAVAILABLE',
+          error: 'Python score recalculation service is currently unreachable.',
+        });
+      }
       console.warn(
         '[ChoirMate Server] Python HTTP service unreachable for recalculate, falling back to CLI:',
         httpErr instanceof Error ? httpErr.message : httpErr
@@ -732,8 +675,8 @@ app.post('/api/recalculate-score', async (req, res) => {
         });
       }
     });
-      pythonProcess.stdin.write(JSON.stringify(payload));
-      pythonProcess.stdin.end();
+    pythonProcess.stdin.write(JSON.stringify(payload));
+    pythonProcess.stdin.end();
   } catch (err: any) {
     console.error('Server error in /api/recalculate-score:', err);
     return res.status(500).json({
@@ -798,10 +741,15 @@ app.post('/api/export-audio', async (req, res) => {
     try {
       const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/export-audio`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildPythonHeaders(),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(45000),
       });
+
+      if (pyResponse.status === 401 || pyResponse.status === 403) {
+        const authJson: any = await pyResponse.json().catch(() => ({}));
+        return res.status(pyResponse.status).json(authJson);
+      }
 
       if (pyResponse.ok) {
         const pyJson: any = await pyResponse.json();
@@ -816,6 +764,13 @@ app.post('/api/export-audio', async (req, res) => {
         });
       }
     } catch (httpErr) {
+      if (!IS_LOCAL_PYTHON_BACKEND) {
+        return res.status(503).json({
+          success: false,
+          errorCode: 'AUDIO_EXPORT_UNAVAILABLE',
+          error: 'Python audio export service is currently unreachable.',
+        });
+      }
       console.warn(
         '[ChoirMate Server] Python service unreachable for /export-audio, falling back to CLI:',
         httpErr instanceof Error ? httpErr.message : httpErr
@@ -946,7 +901,7 @@ async function askSmolLM2Teacher(payload: Record<string, any>): Promise<any> {
   try {
     const pyRes = await fetch(`${PYTHON_SERVICE_URL}/ask-teacher`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildPythonHeaders(),
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30000),
     });
