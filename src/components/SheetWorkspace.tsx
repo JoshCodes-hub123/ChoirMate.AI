@@ -364,7 +364,23 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({
           composer: scoreComposer.trim() || 'Uploaded Score',
           tempo: targetTempo || 88,
         },
-        abortCtrl.signal
+        abortCtrl.signal,
+        (jobState, elapsedSeconds) => {
+          const elapsedTag = elapsedSeconds > 0 ? ` (${Math.round(elapsedSeconds)}s elapsed)` : '';
+          if (jobState === 'queued') {
+            setAnalysisStageText(
+              `Queued on Python HOMR recognition worker${elapsedTag} — waiting for active job to finish...`
+            );
+          } else {
+            setAnalysisStageText(
+              uploadMode === 'pdf'
+                ? `Running Python HOMR Optical Music Recognition on PDF score${elapsedTag}...`
+                : `Running Python HOMR Optical Music Recognition on ${pageImages.length} page${
+                    pageImages.length > 1 ? 's' : ''
+                  }${elapsedTag}...`
+            );
+          }
+        }
       );
 
       if (!result.data) {
@@ -375,6 +391,18 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({
         );
       }
 
+      const restoredPageImages =
+        Array.isArray(result.data.pageImages) && result.data.pageImages.length > 0
+          ? result.data.pageImages
+          : pageImages.length > 0
+          ? pageImages
+          : undefined;
+      const restoredImageUrl =
+        result.data.imageUrl ||
+        (restoredPageImages && restoredPageImages.length > 0
+          ? restoredPageImages[0]
+          : undefined);
+
       const analyzedScore: ScoreAnalysis = {
         ...result.data,
         isDemonstration: false,
@@ -382,10 +410,8 @@ export const SheetWorkspace: React.FC<SheetWorkspaceProps> = ({
         rawMusicXml:
           result.data.rawMusicXml ||
           (uploadMode === 'musicxml' ? musicXmlContent : undefined),
-        imageUrl:
-          result.data.imageUrl || (pageImages.length > 0 ? pageImages[0] : undefined),
-        pageImages:
-          result.data.pageImages || (pageImages.length > 0 ? pageImages : undefined),
+        imageUrl: restoredImageUrl,
+        pageImages: restoredPageImages,
       };
 
       setIsAnalyzing(false);

@@ -7,10 +7,14 @@ Port: 5001
 
 import hmac
 import os
+import queue
+import re
+import secrets
 import sys
 import threading
+import time
 import traceback
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 
 def _load_local_env_files() -> None:
@@ -43,10 +47,12 @@ _load_local_env_files()
 try:
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
     from pydantic import BaseModel
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
+    JSONResponse = None  # type: ignore
     class FastAPI:  # type: ignore
         def __init__(self, *args: Any, **kwargs: Any): pass
         def get(self, *args: Any, **kwargs: Any): return lambda f: f
@@ -150,7 +156,6 @@ app.add_middleware(
 
 if HAS_FASTAPI and PYTHON_SERVICE_SECRET:
     from fastapi import Request
-    from fastapi.responses import JSONResponse
 
     @app.middleware("http")
     async def verify_service_secret(request: Request, call_next: Any):
@@ -191,6 +196,7 @@ class AnalyzeRequest(BaseModel):
     title: Optional[str] = "Analyzed Score"
     composer: Optional[str] = "Unknown Composer"
     tempo: Optional[int] = 76
+    simulatedDelaySeconds: Optional[float] = None
 
 
 class RecalculateRequest(BaseModel):
@@ -594,6 +600,334 @@ def analyze(req: AnalyzeRequest):
             }
 
 
+# ---------------------------------------------------------------------------
+# Asynchronous HOMR Job Manager (In-Memory, Single Worker, Bounded Queue)
+#
+# NOTE: Jobs and completed results are stored in process memory only and will
+# be cleared if the Python service restarts. Completed and failed jobs remain
+# retrievable for up to JOB_RETENTION_SECONDS (15 minutes) and are never
+# deleted immediately on the first status poll.
+# ---------------------------------------------------------------------------
+
+_JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,80}$")
+MAX_QUEUED_JOBS = 8
+MAX_STORED_COMPLETED_JOBS = 20
+JOB_RETENTION_SECONDS = 900.0  # 15 minutes
+
+_JOBS_LOCK = threading.Lock()
+_JOBS: Dict[str, Dict[str, Any]] = {}
+_JOB_QUEUE: "queue.Queue[str]" = queue.Queue(maxsize=MAX_QUEUED_JOBS)
+_WORKER_THREAD: Optional[threading.Thread] = None
+
+
+def _prune_expired_jobs_locked(now: float) -> None:
+    """
+    Removes terminal (completed/failed) jobs older than JOB_RETENTION_SECONDS
+    and enforces MAX_STORED_COMPLETED_JOBS by evicting the oldest finished jobs.
+    Must be called while holding _JOBS_LOCK.
+    """
+    terminal_ids: List[Tuple[float, str]] = []
+    for jid, rec in list(_JOBS.items()):
+        st = rec.get("status")
+        if st in ("completed", "failed"):
+            finished_at = float(rec.get("finishedAt") or rec.get("updatedAt") or rec.get("createdAt") or now)
+            if now - finished_at > JOB_RETENTION_SECONDS:
+                _JOBS.pop(jid, None)
+            else:
+                terminal_ids.append((finished_at, jid))
+
+    if len(terminal_ids) > MAX_STORED_COMPLETED_JOBS:
+        terminal_ids.sort(key=lambda item: item[0])
+        excess = len(terminal_ids) - MAX_STORED_COMPLETED_JOBS
+        for _, oldest_jid in terminal_ids[:excess]:
+            _JOBS.pop(oldest_jid, None)
+
+
+def _analysis_worker_loop() -> None:
+    """
+    Single background worker thread that processes queued HOMR analysis jobs
+    sequentially. Any failure in one job is caught and recorded on that job
+    so the worker always continues to the next queued job.
+    """
+    while True:
+        job_id = _JOB_QUEUE.get()
+        try:
+            with _JOBS_LOCK:
+                job = _JOBS.get(job_id)
+                if not job:
+                    continue
+                req: Optional[AnalyzeRequest] = job.get("request")
+                now = time.time()
+                job["status"] = "processing"
+                job["startedAt"] = now
+                job["updatedAt"] = now
+
+            if req is None:
+                with _JOBS_LOCK:
+                    if job_id in _JOBS:
+                        _JOBS[job_id]["status"] = "failed"
+                        _JOBS[job_id]["finishedAt"] = time.time()
+                        _JOBS[job_id]["updatedAt"] = time.time()
+                        _JOBS[job_id]["result"] = {
+                            "success": False,
+                            "errorCode": "NO_INPUT_PROVIDED",
+                            "error": "Job request payload was empty.",
+                        }
+                continue
+
+            # Optional test hook to verify >55s long-running job polling
+            sim_delay = getattr(req, "simulatedDelaySeconds", None)
+            if sim_delay is not None:
+                try:
+                    delay_val = min(max(float(sim_delay), 0.0), 120.0)
+                    if delay_val > 0:
+                        time.sleep(delay_val)
+                except Exception:
+                    pass
+
+            analysis_res = analyze(req)
+            finished_ts = time.time()
+
+            with _JOBS_LOCK:
+                job_rec = _JOBS.get(job_id)
+                if job_rec is not None:
+                    job_rec["request"] = None  # Free input base64 memory
+                    job_rec["finishedAt"] = finished_ts
+                    job_rec["updatedAt"] = finished_ts
+                    if analysis_res.get("success") and analysis_res.get("data"):
+                        # The frontend already has original page images. Keep status
+                        # responses compact enough for the Vercel gateway.
+                        analysis_res["data"].pop("pageImages", None)
+                        analysis_res["data"].pop("imageUrl", None)
+                        job_rec["status"] = "completed"
+                        job_rec["result"] = analysis_res
+                    else:
+                        job_rec["status"] = "failed"
+                        job_rec["result"] = analysis_res
+                _prune_expired_jobs_locked(finished_ts)
+
+        except Exception as worker_err:
+            sys.stderr.write(f"[Python Service] Async worker error on job {job_id}: {worker_err}\n")
+            traceback.print_exc(file=sys.stderr)
+            with _JOBS_LOCK:
+                job_rec = _JOBS.get(job_id)
+                if job_rec is not None:
+                    job_rec["request"] = None
+                    job_rec["status"] = "failed"
+                    job_rec["finishedAt"] = time.time()
+                    job_rec["updatedAt"] = time.time()
+                    job_rec["result"] = {
+                        "success": False,
+                        "errorCode": "INTERNAL_ANALYSIS_ERROR",
+                        "error": "Could not complete score recognition on the uploaded file.",
+                    }
+        finally:
+            _JOB_QUEUE.task_done()
+
+
+def _ensure_worker_started_locked() -> None:
+    """Starts the single background worker thread if not already alive. Must hold _JOBS_LOCK."""
+    global _WORKER_THREAD
+    if _WORKER_THREAD is None or not _WORKER_THREAD.is_alive():
+        _WORKER_THREAD = threading.Thread(
+            target=_analysis_worker_loop,
+            name="choirmate-homr-worker",
+            daemon=True,
+        )
+        _WORKER_THREAD.start()
+
+
+def start_analyze_job(req: AnalyzeRequest) -> Tuple[int, Dict[str, Any]]:
+    """
+    Enqueues a score analysis request without waiting for HOMR recognition or _SERVICE_LOCK.
+    Returns (http_status_code, response_dict).
+    """
+    has_pages = bool(req.pages and len(req.pages) > 0)
+    if not req.musicxml and not req.pdfBase64 and not req.imageBase64 and not has_pages:
+        return (
+            400,
+            {
+                "success": False,
+                "errorCode": "NO_INPUT_PROVIDED",
+                "error": "Please provide a sheet music PDF document, page image(s), or a MusicXML file.",
+            },
+        )
+
+    now = time.time()
+    job_id = secrets.token_urlsafe(24)
+
+    with _JOBS_LOCK:
+        _prune_expired_jobs_locked(now)
+        _ensure_worker_started_locked()
+
+        active_count = sum(1 for r in _JOBS.values() if r.get("status") in ("queued", "processing"))
+        if _JOB_QUEUE.full() or active_count >= (MAX_QUEUED_JOBS + 1):
+            return (
+                429,
+                {
+                    "success": False,
+                    "errorCode": "ANALYSIS_QUEUE_FULL",
+                    "error": "The score recognition queue is currently full. Please wait for the current score analysis to finish and try again.",
+                },
+            )
+
+        is_worker_busy = any(r.get("status") == "processing" for r in _JOBS.values()) or not _JOB_QUEUE.empty()
+        _JOBS[job_id] = {
+            "jobId": job_id,
+            "status": "queued",
+            "createdAt": now,
+            "startedAt": None,
+            "finishedAt": None,
+            "updatedAt": now,
+            "request": req,
+            "result": None,
+        }
+        try:
+            _JOB_QUEUE.put_nowait(job_id)
+        except queue.Full:
+            _JOBS.pop(job_id, None)
+            return (
+                429,
+                {
+                    "success": False,
+                    "errorCode": "ANALYSIS_QUEUE_FULL",
+                    "error": "The score recognition queue is currently full. Please wait a moment and try again.",
+                },
+            )
+
+    return (
+        202,
+        {
+            "success": True,
+            "jobId": job_id,
+            "status": "queued",
+            "workerBusy": is_worker_busy,
+            "message": (
+                "Score queued behind active recognition job..."
+                if is_worker_busy
+                else "Score submitted to HOMR recognition engine..."
+            ),
+        },
+    )
+
+
+def get_analyze_job_status(job_id: str) -> Tuple[int, Dict[str, Any]]:
+    """
+    Retrieves the current status or final result of an asynchronous analysis job.
+    Does not delete completed results on read; jobs expire after JOB_RETENTION_SECONDS.
+    """
+    clean_id = (job_id or "").strip()
+    if not _JOB_ID_PATTERN.match(clean_id):
+        return (
+            400,
+            {
+                "success": False,
+                "status": "failed",
+                "errorCode": "INVALID_JOB_ID",
+                "error": "Invalid analysis job identifier.",
+            },
+        )
+
+    now = time.time()
+    with _JOBS_LOCK:
+        _prune_expired_jobs_locked(now)
+        job = _JOBS.get(clean_id)
+        if job is None:
+            return (
+                404,
+                {
+                    "success": False,
+                    "status": "failed",
+                    "errorCode": "JOB_NOT_FOUND",
+                    "error": (
+                        "Recognition job was not found or expired (in-memory jobs are cleared if the Python "
+                        "service restarts). Please start the analysis again."
+                    ),
+                },
+            )
+
+        status = job["status"]
+        created_at = float(job.get("createdAt") or now)
+        elapsed = round(max(0.0, now - created_at), 1)
+        result = job.get("result")
+
+    if status in ("queued", "processing"):
+        return (
+            200,
+            {
+                "success": True,
+                "jobId": clean_id,
+                "status": status,
+                "elapsedSeconds": elapsed,
+                "message": (
+                    "Running HOMR Optical Music Recognition & music theory analysis..."
+                    if status == "processing"
+                    else "Queued for HOMR Optical Music Recognition..."
+                ),
+            },
+        )
+
+    if status == "completed" and isinstance(result, dict) and result.get("data"):
+        return (
+            200,
+            {
+                "success": True,
+                "jobId": clean_id,
+                "status": "completed",
+                "elapsedSeconds": elapsed,
+                "data": result["data"],
+                "source": result.get("source"),
+            },
+        )
+
+    err_dict = result if isinstance(result, dict) else {}
+    return (
+        200,
+        {
+            "success": False,
+            "jobId": clean_id,
+            "status": "failed",
+            "elapsedSeconds": elapsed,
+            "errorCode": err_dict.get("errorCode") or "OMR_RECOGNITION_FAILED",
+            "error": err_dict.get("error") or FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+            "sectionDiagnostics": err_dict.get("sectionDiagnostics") or [],
+            "omrAttempted": bool(err_dict.get("omrAttempted")),
+            "recognitionEngine": err_dict.get("recognitionEngine") or "HOMR",
+        },
+    )
+
+
+@app.post("/analyze/start")
+def analyze_start_endpoint(req: AnalyzeRequest):
+    status_code, payload = start_analyze_job(req)
+    if HAS_FASTAPI and JSONResponse is not None:
+        return JSONResponse(
+            status_code=status_code,
+            content=payload,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+    return payload
+
+
+@app.get("/analyze/status/{job_id}")
+def analyze_status_endpoint(job_id: str):
+    status_code, payload = get_analyze_job_status(job_id)
+    if HAS_FASTAPI and JSONResponse is not None:
+        return JSONResponse(
+            status_code=status_code,
+            content=payload,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+    return payload
+
 
 @app.post("/recalculate")
 def recalculate(req: RecalculateRequest):
@@ -735,6 +1069,9 @@ if __name__ == "__main__":
                 self.send_response(status_code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(body)
@@ -749,15 +1086,21 @@ if __name__ == "__main__":
             def do_GET(self) -> None:
                 if not self._check_auth():
                     return
-                if self.path == "/health":
+                clean_path = self.path.split("?", 1)[0]
+                if clean_path == "/health":
                     self._send_json(200, health())
+                elif clean_path.startswith("/analyze/status/"):
+                    job_id = clean_path[len("/analyze/status/"):]
+                    status_code, payload = get_analyze_job_status(job_id)
+                    self._send_json(status_code, payload)
                 else:
-                    self._send_json(404, {"success": False, "error": f"Unknown GET endpoint: {self.path}"})
+                    self._send_json(404, {"success": False, "error": f"Unknown GET endpoint: {clean_path}"})
 
             def do_POST(self) -> None:
                 if not self._check_auth():
                     return
-                if self.path == "/health":
+                clean_path = self.path.split("?", 1)[0]
+                if clean_path == "/health":
                     self._send_json(200, health())
                     return
 
@@ -770,26 +1113,34 @@ if __name__ == "__main__":
                     return
 
                 try:
-                    if self.path == "/preview-pdf":
+                    if clean_path == "/preview-pdf":
                         res = preview_pdf(PdfPreviewRequest(**data))
-                    elif self.path == "/analyze":
+                        self._send_json(200, res)
+                    elif clean_path == "/analyze/start":
+                        status_code, payload = start_analyze_job(AnalyzeRequest(**data))
+                        self._send_json(status_code, payload)
+                    elif clean_path == "/analyze":
                         res = analyze(AnalyzeRequest(**data))
-                    elif self.path == "/recalculate":
+                        self._send_json(200, res)
+                    elif clean_path == "/recalculate":
                         res = recalculate(RecalculateRequest(**data))
-                    elif self.path == "/export-audio":
+                        self._send_json(200, res)
+                    elif clean_path == "/export-audio":
                         res = export_audio_endpoint(ExportAudioRequest(**data))
-                    elif self.path == "/ask-teacher":
+                        self._send_json(200, res)
+                    elif clean_path == "/ask-teacher":
                         res = ask_teacher_endpoint(AskTeacherRequest(**data))
-                    elif self.path == "/voice-studio/voices":
+                        self._send_json(200, res)
+                    elif clean_path == "/voice-studio/voices":
                         res = get_voices(VoiceExtractionRequest(**data))
-                    elif self.path == "/voice-studio/audio":
+                        self._send_json(200, res)
+                    elif clean_path == "/voice-studio/audio":
                         res = generate_voice_audio(VoiceAudioRequest(**data))
+                        self._send_json(200, res)
                     else:
-                        self._send_json(404, {"success": False, "error": f"Unknown POST endpoint: {self.path}"})
-                        return
-                    self._send_json(200, res)
+                        self._send_json(404, {"success": False, "error": f"Unknown POST endpoint: {clean_path}"})
                 except Exception as err:
-                    sys.stderr.write(f"[Python Fallback HTTP] Error on {self.path}: {err}\n")
+                    sys.stderr.write(f"[Python Fallback HTTP] Error on {clean_path}: {err}\n")
                     traceback.print_exc(file=sys.stderr)
                     self._send_json(500, {"success": False, "error": str(err)})
 

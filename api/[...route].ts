@@ -289,13 +289,88 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  // Require PYTHON_SERVICE_URL for Python engine POST routes
+  // Require PYTHON_SERVICE_URL for Python engine routes
   if (!pythonBaseUrl) {
     return res.status(503).json({
       success: false,
       errorCode: 'HOMR_ENVIRONMENT_REQUIRED',
       error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
     });
+  }
+
+  // 3a. GET /api/analyze-sheet/status?jobId=... (or /api/analyze-sheet/status/:jobId)
+  if (
+    pathname === '/analyze-sheet/status' ||
+    pathname.startsWith('/analyze-sheet/status/')
+  ) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    const jobIdPattern = /^[A-Za-z0-9_-]{16,80}$/;
+    let jobId = '';
+    if (pathname.startsWith('/analyze-sheet/status/')) {
+      jobId = pathname.slice('/analyze-sheet/status/'.length).trim();
+    }
+    if (!jobId && typeof req?.query?.jobId === 'string') {
+      jobId = req.query.jobId.trim();
+    }
+    if (!jobId && typeof req?.url === 'string' && req.url.includes('?')) {
+      const qs = new URLSearchParams(req.url.split('?')[1] || '');
+      jobId = (qs.get('jobId') || '').trim();
+    }
+
+    if (!jobIdPattern.test(jobId)) {
+      return res.status(400).json({
+        success: false,
+        status: 'failed',
+        errorCode: 'INVALID_JOB_ID',
+        error: 'Invalid or missing analysis jobId parameter.',
+      });
+    }
+
+    try {
+      const pyRes = await fetch(
+        `${pythonBaseUrl}/analyze/status/${encodeURIComponent(jobId)}`,
+        {
+          method: 'GET',
+          headers: buildPythonHeaders(),
+          cache: 'no-store',
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+
+      const upstream = await parseUpstreamResponse(pyRes);
+      const pyJson = upstream.json || {};
+
+      if (pyRes.status === 401 || pyRes.status === 403) {
+        return res.status(pyRes.status).json({
+          success: false,
+          status: 'failed',
+          errorCode: pyJson?.errorCode || 'UNAUTHORIZED_PYTHON_CLIENT',
+          error:
+            pyJson?.error ||
+            'Authentication with the ChoirMate Python engine failed. Please verify PYTHON_SERVICE_SECRET matches on Vercel and your Windows laptop.',
+        });
+      }
+
+      // Ensure completed job status responses do not echo redundant base64 pageImages/imageUrl
+      if (pyJson && typeof pyJson.data === 'object' && pyJson.data !== null) {
+        delete pyJson.data.pageImages;
+        delete pyJson.data.imageUrl;
+      }
+
+      return res.status(pyRes.status).json(pyJson);
+    } catch (err: any) {
+      const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      return res.status(isTimeout ? 504 : 503).json({
+        success: false,
+        errorCode: isTimeout ? 'STATUS_POLL_TIMEOUT' : 'HOMR_ENVIRONMENT_REQUIRED',
+        error: isTimeout
+          ? 'Timed out while checking recognition job status.'
+          : FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+      });
+    }
   }
 
   const parsedBody = parseRequestBody(req);
@@ -308,7 +383,90 @@ export default async function handler(req: any, res: any) {
   }
   const body = parsedBody.body;
 
-  // 3. POST /api/analyze-sheet -> ${PYTHON_SERVICE_URL}/analyze
+  // 3b. POST /api/analyze-sheet/start -> ${PYTHON_SERVICE_URL}/analyze/start
+  if (pathname === '/analyze-sheet/start') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    const {
+      imageBase64,
+      pages,
+      pdfBase64,
+      pdfFileName,
+      musicxml,
+      title,
+      composer,
+      tempo,
+      simulatedDelaySeconds,
+    } = body;
+    const pageImages: string[] =
+      Array.isArray(pages) && pages.length > 0
+        ? pages
+        : imageBase64
+        ? [imageBase64]
+        : [];
+
+    if (pageImages.length === 0 && !pdfBase64 && !musicxml) {
+      return res.status(400).json({
+        success: false,
+        errorCode: 'NO_INPUT_PROVIDED',
+        error: 'Please provide a sheet music PDF document, page image(s), or a MusicXML file.',
+      });
+    }
+
+    try {
+      const pyRes = await fetch(`${pythonBaseUrl}/analyze/start`, {
+        method: 'POST',
+        headers: buildPythonHeaders(),
+        cache: 'no-store',
+        body: JSON.stringify({
+          imageBase64: pageImages.length === 1 && !pdfBase64 ? pageImages[0] : undefined,
+          pages: pageImages.length > 1 && !pdfBase64 ? pageImages : undefined,
+          pdfBase64: pdfBase64 || undefined,
+          pdfFileName: pdfFileName || undefined,
+          musicxml,
+          title: title || 'Analyzed Score',
+          composer: composer || 'Unknown Composer',
+          tempo: tempo || 76,
+          simulatedDelaySeconds:
+            typeof simulatedDelaySeconds === 'number' ? simulatedDelaySeconds : undefined,
+        }),
+        signal: AbortSignal.timeout(25000),
+      });
+
+      const upstream = await parseUpstreamResponse(pyRes);
+      const pyJson = upstream.json || {};
+
+      if (pyRes.status === 401 || pyRes.status === 403) {
+        return res.status(pyRes.status).json({
+          success: false,
+          errorCode: pyJson?.errorCode || 'UNAUTHORIZED_PYTHON_CLIENT',
+          error:
+            pyJson?.error ||
+            'Authentication with the ChoirMate Python engine failed. Please verify PYTHON_SERVICE_SECRET matches on Vercel and your Windows laptop.',
+        });
+      }
+
+      if (pyJson && typeof pyJson.data === 'object' && pyJson.data !== null) {
+        delete pyJson.data.pageImages;
+        delete pyJson.data.imageUrl;
+      }
+
+      return res.status(pyRes.status).json(pyJson);
+    } catch (err: any) {
+      const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      return res.status(isTimeout ? 504 : 503).json({
+        success: false,
+        errorCode: isTimeout ? 'UPSTREAM_START_TIMEOUT' : 'HOMR_ENVIRONMENT_REQUIRED',
+        error: isTimeout
+          ? 'Timed out while submitting score to the Python HOMR recognition queue.'
+          : FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+      });
+    }
+  }
+
+  // 3c. POST /api/analyze-sheet -> ${PYTHON_SERVICE_URL}/analyze (Synchronous compatibility fallback)
   if (pathname === '/analyze-sheet') {
     const { imageBase64, pages, pdfBase64, pdfFileName, musicxml, title, composer, tempo } = body;
     const pageImages: string[] =

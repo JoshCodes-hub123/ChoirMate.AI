@@ -7,7 +7,18 @@ import { fileURLToPath } from 'url';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { SAMPLE_SCORES } from './src/data/sampleScores.ts';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = fs.existsSync(path.join(__dirname, 'package.json'))
+  ? __dirname
+  : path.resolve(__dirname, '..');
+
+for (const envFile of ['.env.windows.local', '.env.local', '.env']) {
+  const fullEnvPath = path.join(rootDir, envFile);
+  if (fs.existsSync(fullEnvPath)) {
+    dotenv.config({ path: fullEnvPath, override: false });
+  }
+}
 
 process.on('uncaughtException', (err) => {
   console.error('[ChoirMate Server] Uncaught exception:', err);
@@ -15,12 +26,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[ChoirMate Server] Unhandled rejection:', reason);
 });
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = fs.existsSync(path.join(__dirname, 'package.json'))
-  ? __dirname
-  : path.resolve(__dirname, '..');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -579,6 +584,137 @@ app.post('/api/analyze-sheet', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'An unexpected error occurred while processing the score upload.',
+    });
+  }
+});
+
+const VALID_JOB_ID_REGEX = /^[A-Za-z0-9_-]{16,80}$/;
+
+app.post('/api/analyze-sheet/start', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  try {
+    const {
+      imageBase64,
+      pages,
+      pdfBase64,
+      pdfFileName,
+      musicxml,
+      title,
+      composer,
+      tempo,
+      simulatedDelaySeconds,
+    } = req.body || {};
+
+    const pageImages: string[] =
+      Array.isArray(pages) && pages.length > 0
+        ? pages
+        : imageBase64
+        ? [imageBase64]
+        : [];
+
+    if (pageImages.length === 0 && !pdfBase64 && !musicxml) {
+      return res.status(400).json({
+        success: false,
+        errorCode: 'NO_INPUT_PROVIDED',
+        error: 'Please provide a sheet music PDF document, page image(s), or a MusicXML file.',
+      });
+    }
+
+    await ensurePythonServiceActive();
+
+    const payload = {
+      imageBase64: pageImages.length === 1 && !pdfBase64 ? pageImages[0] : undefined,
+      pages: pageImages.length > 1 && !pdfBase64 ? pageImages : undefined,
+      pdfBase64: pdfBase64 || undefined,
+      pdfFileName: pdfFileName || undefined,
+      musicxml,
+      title: title || 'Analyzed Score',
+      composer: composer || 'Unknown Composer',
+      tempo: tempo || 76,
+      simulatedDelaySeconds:
+        typeof simulatedDelaySeconds === 'number' ? simulatedDelaySeconds : undefined,
+    };
+
+    const pyResponse = await fetch(`${PYTHON_SERVICE_URL}/analyze/start`, {
+      method: 'POST',
+      headers: buildPythonHeaders(),
+      cache: 'no-store',
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(25000),
+    });
+
+    const pyJson: any = await pyResponse.json().catch(() => ({
+      success: false,
+      errorCode: 'INVALID_UPSTREAM_RESPONSE',
+      error: 'Python service returned an invalid response when starting the recognition job.',
+    }));
+
+    if (pyJson && typeof pyJson.data === 'object' && pyJson.data !== null) {
+      delete pyJson.data.pageImages;
+      delete pyJson.data.imageUrl;
+    }
+
+    return res.status(pyResponse.status).json(pyJson);
+  } catch (err: any) {
+    console.error('Server error in /api/analyze-sheet/start:', err?.message || err);
+    return res.status(503).json({
+      success: false,
+      errorCode: 'HOMR_ENVIRONMENT_REQUIRED',
+      error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
+    });
+  }
+});
+
+app.get(['/api/analyze-sheet/status', '/api/analyze-sheet/status/:jobId'], async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  try {
+    const rawJobId = String(req.params.jobId || req.query.jobId || '').trim();
+    if (!VALID_JOB_ID_REGEX.test(rawJobId)) {
+      return res.status(400).json({
+        success: false,
+        status: 'failed',
+        errorCode: 'INVALID_JOB_ID',
+        error: 'Invalid or missing analysis jobId parameter.',
+      });
+    }
+
+    await ensurePythonServiceActive();
+
+    const pyResponse = await fetch(
+      `${PYTHON_SERVICE_URL}/analyze/status/${encodeURIComponent(rawJobId)}`,
+      {
+        method: 'GET',
+        headers: buildPythonHeaders(),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+
+    const pyJson: any = await pyResponse.json().catch(() => ({
+      success: false,
+      status: 'failed',
+      errorCode: 'INVALID_UPSTREAM_RESPONSE',
+      error: 'Python service returned an invalid status payload.',
+    }));
+
+    if (pyJson && typeof pyJson.data === 'object' && pyJson.data !== null) {
+      delete pyJson.data.pageImages;
+      delete pyJson.data.imageUrl;
+    }
+
+    return res.status(pyResponse.status).json(pyJson);
+  } catch (err: any) {
+    console.error('Server error in /api/analyze-sheet/status:', err?.message || err);
+    return res.status(503).json({
+      success: false,
+      errorCode: 'HOMR_ENVIRONMENT_REQUIRED',
+      error: FRIENDLY_HOMR_UNAVAILABLE_MESSAGE,
     });
   }
 });
